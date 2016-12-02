@@ -1647,6 +1647,19 @@ mod test {
     );
 
     #[test]
+    fn tester() {
+        let vec: Vec<Fed3<bool, i64, u8>> = vec![
+            false.into(),
+            27_i64.into(),
+            0_i64.into(),
+            b'A'.into(),
+        ];
+
+        assert_eq!(vec.iter().filter(Fed::is::<i64>).count(), 2);
+        assert_eq!(vec[3].extract::<u8>(), Ok(b'A'));
+    }
+
+    #[test]
     fn fed3() {
         let element: Fed3<String, bool, u8> = 8u8.into();
         let element = element.map_same(|element: u8| element + 83);
