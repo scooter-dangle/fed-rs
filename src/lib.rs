@@ -1,223 +1,3 @@
-pub trait Fed: Sized {
-    fn is<T>(&self) -> bool
-    where Self: Is_<T> {
-        <Self as Is_<T>>::is_(&self)
-    }
-
-    fn extract<T>(self) -> std::result::Result<T, <Self as Extract_<T>>::Lower>
-    where Self: Extract_<T> {
-        <Self as Extract_<T>>::extract_(self)
-    }
-
-    fn map_same<T, F>(self, action: F) -> Self
-    where F: Fn(T) -> T,
-          Self: MapSame_<T>
-    {
-        <Self as MapSame_<T>>::map_same_(self, action)
-    }
-}
-
-impl<T: Sized> Fed for T {}
-
-pub trait Is_<T>: Sized {
-    fn is_(&self) -> bool;
-}
-
-pub trait Extract_<T>: Sized {
-    type Lower: Sized;
-    fn extract_(self) -> ::std::result::Result<T, Self::Lower>;
-}
-
-pub trait MapSame_<T>: Sized {
-    fn map_same_<F>(self, action: F) -> Self where F: Fn(T) -> T;
-}
-
-/// A 'never' type
-#[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
-pub enum Fed0 {}
-
-#[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
-pub enum Fed1<A> {
-    T1(A),
-}
-
-impl<A: ::std::default::Default> Default for Fed1<A> {
-    fn default() -> Self {
-        A::default().into()
-    }
-}
-
-impl<A> ::std::convert::From<A> for Fed1<A> {
-    fn from(t1: A) -> Self {
-        Fed1::T1(t1)
-    }
-}
-
-impl<A> Fed1<A> {
-    // `f_1` taking a function pointer instead of being generic over a function
-    // trait is a compromise to avoid requiring the user to have to fill in a
-    // ton of generic params when calling `map_all`
-    pub fn map_all<T>(self, f_1: &Fn(A) -> T) -> T {
-        match self {
-            Fed1::T1(t1) => f_1(t1),
-        }
-    }
-
-    pub fn into_tuple(self) -> (Option<A>,) {
-        match self {
-            Fed1::T1(t1) => (Some(t1),),
-        }
-    }
-}
-
-#[test]
-fn map_all() {
-    let var: Fed1<String> = String::from("abc").into();
-    assert_eq!(
-        var.map_all::<Fed1<_>>(
-            &|string: String| string.contains('b').into()
-        ),
-        true.into()
-    );
-}
-
-impl<A: Sized> Is_<A> for Fed1<A> {
-    fn is_(&self) -> bool { true }
-}
-
-impl<'a, A: Sized> Is_<A> for &'a Fed1<A> {
-    fn is_(&self) -> bool { true }
-}
-
-impl<A: Sized> Extract_<A> for Fed1<A> {
-    type Lower = Fed0;
-    fn extract_(self) -> ::std::result::Result<A, Self::Lower> {
-        match self { Fed1::T1(val) => ::std::result::Result::Ok(val) }
-    }
-}
-
-impl<A: Sized> MapSame_<A> for Fed1<A> {
-    fn map_same_<F>(self, action: F) -> Self where F: Fn(A) -> A {
-        match self { Fed1::T1(val) => action(val).into() }
-    }
-}
-
-// Don't know how to turn the following `into_tuple` implementations into
-// macros
-
-impl<A, B> Fed2<A, B> {
-    // Hack to facilitate matching in absence of dedicated `match` syntax for
-    // type federations
-    pub fn into_tuple(self) -> (Option<A>, Option<B>) {
-        match self {
-            Fed2::T1(val) => (Some(val), None),
-            Fed2::T2(val) => (None, Some(val)),
-        }
-    }
-}
-
-impl<A, B, C> Fed3<A, B, C> {
-    pub fn into_tuple(self) -> (Option<A>, Option<B>, Option<C>) {
-        match self {
-            Fed3::T1(val) => (Some(val), None, None),
-            Fed3::T2(val) => (None, Some(val), None),
-            Fed3::T3(val) => (None, None, Some(val)),
-        }
-    }
-}
-
-impl<A, B, C, D> Fed4<A, B, C, D> {
-    pub fn into_tuple(self) -> (Option<A>, Option<B>, Option<C>, Option<D>) {
-        match self {
-            Fed4::T1(val) => (Some(val), None, None, None),
-            Fed4::T2(val) => (None, Some(val), None, None),
-            Fed4::T3(val) => (None, None, Some(val), None),
-            Fed4::T4(val) => (None, None, None, Some(val)),
-        }
-    }
-}
-
-impl<A, B, C, D, E> Fed5<A, B, C, D, E> {
-    pub fn into_tuple(self) -> (Option<A>, Option<B>, Option<C>, Option<D>, Option<E>) {
-        match self {
-            Fed5::T1(val) => (Some(val), None, None, None, None),
-            Fed5::T2(val) => (None, Some(val), None, None, None),
-            Fed5::T3(val) => (None, None, Some(val), None, None),
-            Fed5::T4(val) => (None, None, None, Some(val), None),
-            Fed5::T5(val) => (None, None, None, None, Some(val)),
-        }
-    }
-}
-
-impl<A, B, C, D, E, F> Fed6<A, B, C, D, E, F> {
-    pub fn into_tuple(self) -> (Option<A>, Option<B>, Option<C>, Option<D>, Option<E>, Option<F>) {
-        match self {
-            Fed6::T1(val) => (Some(val), None, None, None, None, None),
-            Fed6::T2(val) => (None, Some(val), None, None, None, None),
-            Fed6::T3(val) => (None, None, Some(val), None, None, None),
-            Fed6::T4(val) => (None, None, None, Some(val), None, None),
-            Fed6::T5(val) => (None, None, None, None, Some(val), None),
-            Fed6::T6(val) => (None, None, None, None, None, Some(val)),
-        }
-    }
-}
-
-impl<A, B, C, D, E, F, G> Fed7<A, B, C, D, E, F, G> {
-    pub fn into_tuple(self) -> (Option<A>, Option<B>, Option<C>, Option<D>, Option<E>, Option<F>, Option<G>) {
-        match self {
-            Fed7::T1(val) => (Some(val), None, None, None, None, None, None),
-            Fed7::T2(val) => (None, Some(val), None, None, None, None, None),
-            Fed7::T3(val) => (None, None, Some(val), None, None, None, None),
-            Fed7::T4(val) => (None, None, None, Some(val), None, None, None),
-            Fed7::T5(val) => (None, None, None, None, Some(val), None, None),
-            Fed7::T6(val) => (None, None, None, None, None, Some(val), None),
-            Fed7::T7(val) => (None, None, None, None, None, None, Some(val)),
-        }
-    }
-}
-
-impl<A, B, C, D, E, F, G, H> Fed8<A, B, C, D, E, F, G, H> {
-    pub fn into_tuple(self) -> (Option<A>, Option<B>, Option<C>, Option<D>, Option<E>, Option<F>, Option<G>, Option<H>) {
-        match self {
-            Fed8::T1(val) => (Some(val), None, None, None, None, None, None, None),
-            Fed8::T2(val) => (None, Some(val), None, None, None, None, None, None),
-            Fed8::T3(val) => (None, None, Some(val), None, None, None, None, None),
-            Fed8::T4(val) => (None, None, None, Some(val), None, None, None, None),
-            Fed8::T5(val) => (None, None, None, None, Some(val), None, None, None),
-            Fed8::T6(val) => (None, None, None, None, None, Some(val), None, None),
-            Fed8::T7(val) => (None, None, None, None, None, None, Some(val), None),
-            Fed8::T8(val) => (None, None, None, None, None, None, None, Some(val)),
-        }
-    }
-}
-
-macro_rules! basic_fed {
-    ($typename:ident, $($letter:ident => [$enum_var:ident; $arg_name:ident]),*,) => {
-        #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
-        pub enum $typename< $($letter),* > {
-            $(
-            $enum_var($letter)
-            ),*
-        }
-
-        impl< $($letter),* > $typename< $($letter),* > {
-            pub fn map_all<T>(self, $( $arg_name : &Fn($letter) -> T ),* ) -> T {
-                match self {
-                    $(
-                    $typename::$enum_var(val) => $arg_name(val)
-                    ),*
-                }
-            }
-        }
-    };
-}
-
-basic_fed!{
-    Fed2,
-    A => [T1; f_1],
-    B => [T2; f_2],
-}
-
 // // Doesn't work...complains about duplicate implementations.
 // // Have to implement non-generically (with concrete types)
 //
@@ -246,63 +26,293 @@ basic_fed!{
 //     }
 // }
 
-basic_fed!{
-    Fed3,
-    A => [T1; f_1],
-    B => [T2; f_2],
-    C => [T3; f_3],
+#[macro_export]
+macro_rules! basic_fed {
+    ($typename:ident, $($letter:ident => [$enum_var:ident; $arg_name:ident]),*,) => {
+        #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+        pub enum $typename< $($letter),* > {
+            $(
+            $enum_var($letter)
+            ),*
+        }
+
+        impl< $($letter),* > $typename< $($letter),* > {
+            pub fn map_all<T>(self, $( $arg_name : &Fn($letter) -> T ),* ) -> T {
+                match self {
+                    $(
+                    $typename::$enum_var(val) => $arg_name(val)
+                    ),*
+                }
+            }
+        }
+    };
 }
 
-basic_fed!{
-    Fed4,
-    A => [T1; f_1],
-    B => [T2; f_2],
-    C => [T3; f_3],
-    D => [T4; f_4],
+#[macro_export]
+macro_rules! init_fed {
+    () => {
+        #[allow(dead_code)]
+        pub mod fed {
+            pub trait Fed: Sized {
+                fn is<T>(&self) -> bool
+                where Self: Is_<T> {
+                    <Self as Is_<T>>::is_(&self)
+                }
+
+                fn extract<T>(self) -> ::std::result::Result<T, <Self as Extract_<T>>::Lower>
+                where Self: Extract_<T> {
+                    <Self as Extract_<T>>::extract_(self)
+                }
+
+                fn map_same<T, F>(self, action: F) -> Self
+                where F: Fn(T) -> T,
+                      Self: MapSame_<T>
+                {
+                    <Self as MapSame_<T>>::map_same_(self, action)
+                }
+            }
+
+            impl<T: Sized> Fed for T {}
+
+            pub trait Is_<T>: Sized {
+                fn is_(&self) -> bool;
+            }
+
+            pub trait Extract_<T>: Sized {
+                type Lower: Sized;
+                fn extract_(self) -> ::std::result::Result<T, Self::Lower>;
+            }
+
+            pub trait MapSame_<T>: Sized {
+                fn map_same_<F>(self, action: F) -> Self where F: Fn(T) -> T;
+            }
+
+            /// A 'never' type
+            #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+            pub enum Fed0 {}
+
+            #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+            pub enum Fed1<A> {
+                T1(A),
+            }
+
+            impl<A: ::std::default::Default> ::std::default::Default for Fed1<A> {
+                fn default() -> Self {
+                    A::default().into()
+                }
+            }
+
+            impl<A> ::std::convert::From<A> for Fed1<A> {
+                fn from(t1: A) -> Self {
+                    Fed1::T1(t1)
+                }
+            }
+
+            impl<A> Fed1<A> {
+                // `f_1` taking a function pointer instead of being generic over a function
+                // trait is a compromise to avoid requiring the user to have to fill in a
+                // ton of generic params when calling `map_all`
+                pub fn map_all<T>(self, f_1: &Fn(A) -> T) -> T {
+                    match self {
+                        Fed1::T1(t1) => f_1(t1),
+                    }
+                }
+
+                pub fn into_tuple(self) -> (Option<A>,) {
+                    match self {
+                        Fed1::T1(t1) => (Some(t1),),
+                    }
+                }
+            }
+
+            #[test]
+            fn map_all() {
+                let var: Fed1<String> = String::from("abc").into();
+                assert_eq!(
+                    var.map_all::<Fed1<_>>(
+                        &|string: String| string.contains('b').into()
+                    ),
+                    true.into()
+                );
+            }
+
+            impl<A: Sized> Is_<A> for Fed1<A> {
+                fn is_(&self) -> bool { true }
+            }
+
+            impl<'a, A: Sized> Is_<A> for &'a Fed1<A> {
+                fn is_(&self) -> bool { true }
+            }
+
+            impl<A: Sized> Extract_<A> for Fed1<A> {
+                type Lower = Fed0;
+                fn extract_(self) -> ::std::result::Result<A, Self::Lower> {
+                    match self { Fed1::T1(val) => ::std::result::Result::Ok(val) }
+                }
+            }
+
+            impl<A: Sized> MapSame_<A> for Fed1<A> {
+                fn map_same_<F>(self, action: F) -> Self where F: Fn(A) -> A {
+                    match self { Fed1::T1(val) => action(val).into() }
+                }
+            }
+
+            // Don't know how to turn the following `into_tuple` implementations into
+            // macros
+
+            basic_fed!{
+                Fed2,
+                A => [T1; f_1],
+                B => [T2; f_2],
+            }
+
+            basic_fed!{
+                Fed3,
+                A => [T1; f_1],
+                B => [T2; f_2],
+                C => [T3; f_3],
+            }
+
+            basic_fed!{
+                Fed4,
+                A => [T1; f_1],
+                B => [T2; f_2],
+                C => [T3; f_3],
+                D => [T4; f_4],
+            }
+
+            basic_fed!{
+                Fed5,
+                A => [T1; f_1],
+                B => [T2; f_2],
+                C => [T3; f_3],
+                D => [T4; f_4],
+                E => [T5; f_5],
+            }
+
+            basic_fed!{
+                Fed6,
+                A => [T1; f_1],
+                B => [T2; f_2],
+                C => [T3; f_3],
+                D => [T4; f_4],
+                E => [T5; f_5],
+                F => [T6; f_6],
+            }
+
+            basic_fed!{
+                Fed7,
+                A => [T1; f_1],
+                B => [T2; f_2],
+                C => [T3; f_3],
+                D => [T4; f_4],
+                E => [T5; f_5],
+                F => [T6; f_6],
+                G => [T7; f_7],
+            }
+
+            basic_fed!{
+                Fed8,
+                A => [T1; f_1],
+                B => [T2; f_2],
+                C => [T3; f_3],
+                D => [T4; f_4],
+                E => [T5; f_5],
+                F => [T6; f_6],
+                G => [T7; f_7],
+                H => [T8; f_8],
+            }
+
+            impl<A, B> Fed2<A, B> {
+                // Hack to facilitate matching in absence of dedicated `match` syntax for
+                // type federations
+                pub fn into_tuple(self) -> (Option<A>, Option<B>) {
+                    match self {
+                        Fed2::T1(val) => (Some(val), None),
+                        Fed2::T2(val) => (None, Some(val)),
+                    }
+                }
+            }
+
+            impl<A, B, C> Fed3<A, B, C> {
+                pub fn into_tuple(self) -> (Option<A>, Option<B>, Option<C>) {
+                    match self {
+                        Fed3::T1(val) => (Some(val), None, None),
+                        Fed3::T2(val) => (None, Some(val), None),
+                        Fed3::T3(val) => (None, None, Some(val)),
+                    }
+                }
+            }
+
+            impl<A, B, C, D> Fed4<A, B, C, D> {
+                pub fn into_tuple(self) -> (Option<A>, Option<B>, Option<C>, Option<D>) {
+                    match self {
+                        Fed4::T1(val) => (Some(val), None, None, None),
+                        Fed4::T2(val) => (None, Some(val), None, None),
+                        Fed4::T3(val) => (None, None, Some(val), None),
+                        Fed4::T4(val) => (None, None, None, Some(val)),
+                    }
+                }
+            }
+
+            impl<A, B, C, D, E> Fed5<A, B, C, D, E> {
+                pub fn into_tuple(self) -> (Option<A>, Option<B>, Option<C>, Option<D>, Option<E>) {
+                    match self {
+                        Fed5::T1(val) => (Some(val), None, None, None, None),
+                        Fed5::T2(val) => (None, Some(val), None, None, None),
+                        Fed5::T3(val) => (None, None, Some(val), None, None),
+                        Fed5::T4(val) => (None, None, None, Some(val), None),
+                        Fed5::T5(val) => (None, None, None, None, Some(val)),
+                    }
+                }
+            }
+
+            impl<A, B, C, D, E, F> Fed6<A, B, C, D, E, F> {
+                pub fn into_tuple(self) -> (Option<A>, Option<B>, Option<C>, Option<D>, Option<E>, Option<F>) {
+                    match self {
+                        Fed6::T1(val) => (Some(val), None, None, None, None, None),
+                        Fed6::T2(val) => (None, Some(val), None, None, None, None),
+                        Fed6::T3(val) => (None, None, Some(val), None, None, None),
+                        Fed6::T4(val) => (None, None, None, Some(val), None, None),
+                        Fed6::T5(val) => (None, None, None, None, Some(val), None),
+                        Fed6::T6(val) => (None, None, None, None, None, Some(val)),
+                    }
+                }
+            }
+
+            impl<A, B, C, D, E, F, G> Fed7<A, B, C, D, E, F, G> {
+                pub fn into_tuple(self) -> (Option<A>, Option<B>, Option<C>, Option<D>, Option<E>, Option<F>, Option<G>) {
+                    match self {
+                        Fed7::T1(val) => (Some(val), None, None, None, None, None, None),
+                        Fed7::T2(val) => (None, Some(val), None, None, None, None, None),
+                        Fed7::T3(val) => (None, None, Some(val), None, None, None, None),
+                        Fed7::T4(val) => (None, None, None, Some(val), None, None, None),
+                        Fed7::T5(val) => (None, None, None, None, Some(val), None, None),
+                        Fed7::T6(val) => (None, None, None, None, None, Some(val), None),
+                        Fed7::T7(val) => (None, None, None, None, None, None, Some(val)),
+                    }
+                }
+            }
+
+            impl<A, B, C, D, E, F, G, H> Fed8<A, B, C, D, E, F, G, H> {
+                pub fn into_tuple(self) -> (Option<A>, Option<B>, Option<C>, Option<D>, Option<E>, Option<F>, Option<G>, Option<H>) {
+                    match self {
+                        Fed8::T1(val) => (Some(val), None, None, None, None, None, None, None),
+                        Fed8::T2(val) => (None, Some(val), None, None, None, None, None, None),
+                        Fed8::T3(val) => (None, None, Some(val), None, None, None, None, None),
+                        Fed8::T4(val) => (None, None, None, Some(val), None, None, None, None),
+                        Fed8::T5(val) => (None, None, None, None, Some(val), None, None, None),
+                        Fed8::T6(val) => (None, None, None, None, None, Some(val), None, None),
+                        Fed8::T7(val) => (None, None, None, None, None, None, Some(val), None),
+                        Fed8::T8(val) => (None, None, None, None, None, None, None, Some(val)),
+                    }
+                }
+            }
+        }
+    };
 }
 
-basic_fed!{
-    Fed5,
-    A => [T1; f_1],
-    B => [T2; f_2],
-    C => [T3; f_3],
-    D => [T4; f_4],
-    E => [T5; f_5],
-}
-
-basic_fed!{
-    Fed6,
-    A => [T1; f_1],
-    B => [T2; f_2],
-    C => [T3; f_3],
-    D => [T4; f_4],
-    E => [T5; f_5],
-    F => [T6; f_6],
-}
-
-basic_fed!{
-    Fed7,
-    A => [T1; f_1],
-    B => [T2; f_2],
-    C => [T3; f_3],
-    D => [T4; f_4],
-    E => [T5; f_5],
-    F => [T6; f_6],
-    G => [T7; f_7],
-}
-
-basic_fed!{
-    Fed8,
-    A => [T1; f_1],
-    B => [T2; f_2],
-    C => [T3; f_3],
-    D => [T4; f_4],
-    E => [T5; f_5],
-    F => [T6; f_6],
-    G => [T7; f_7],
-    H => [T8; f_8],
-}
-
+#[macro_export]
 macro_rules! from_fed {
     ($newtype:ty; $a:ty, $enum_var:path) => {
         impl ::std::convert::From<$a> for $newtype {
@@ -313,6 +323,7 @@ macro_rules! from_fed {
     };
 }
 
+#[macro_export]
 macro_rules! fed_traits {
     ($newtype:ty; $a:ty, $enum_var:path, $lower_type:ident, $($b:ty => $b_enum_var:path),*) => {
         impl Is_<$a> for $newtype {
@@ -358,6 +369,7 @@ macro_rules! fed_traits {
     };
 }
 
+#[macro_export]
 macro_rules! fed_promotion {
     ($littletype:ty => $bigtype:ty; $($enum_var:path),+) => {
         impl ::std::convert::From<$littletype> for $bigtype {
@@ -1615,7 +1627,8 @@ macro_rules! fed_vec {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    init_fed!();
+    use self::fed::*;
 
     fed!(
         String,
