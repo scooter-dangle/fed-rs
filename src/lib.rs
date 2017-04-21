@@ -45,6 +45,19 @@ macro_rules! basic_fed {
                 }
             }
         }
+
+        impl< $($letter),* > IsSameType1_ for $typename< $($letter),* > {
+            fn is_same_type1_(&self, other: &Self) -> bool {
+                match (self, other) {
+                    $(
+                    (&$typename::$enum_var(_), &$typename::$enum_var(_)) => true
+                    ),*
+                    ,
+                    _ => false,
+                }
+            }
+        }
+
     };
 }
 
@@ -85,6 +98,10 @@ macro_rules! init_fed {
 
             pub trait MapSame_<T>: Sized {
                 fn map_same_<F>(self, action: F) -> Self where F: Fn(T) -> T;
+            }
+
+            pub trait IsSameType1_: Fed {
+                fn is_same_type1_(&self, other: &Self) -> bool;
             }
 
             /// A 'never' type
@@ -143,6 +160,14 @@ macro_rules! init_fed {
             impl<'a, A: Sized> Is_<A> for &'a Fed1<A> {
                 fn is_(&self) -> bool { true }
             }
+
+            impl<A> IsSameType1_ for Fed1<A> {
+                fn is_same_type1_(&self, _: &Self) -> bool {
+                    true
+                }
+            }
+
+            // impl<A, B> IsSameType1_<Fed1<B>> for Fed1<A> {}
 
             impl<A: Sized> Extract_<A> for Fed1<A> {
                 type Lower = Fed0;
@@ -1858,5 +1883,26 @@ mod test {
         ];
 
         assert_eq!(options2, options3);
+    }
+
+    #[test]
+    fn is_same_type1_fed1() {
+        let a: Fed1<_> = 32u8.into();
+        let b: Fed1<_> =  3u8.into();
+
+        assert!(a.is_same_type1_(&b));
+    }
+
+    #[test]
+    fn is_same_type1_fed2() {
+        let b1_a: Fed2<B1, B2> = B1.into();
+        assert!(b1_a.is_same_type1_(&b1_a));
+
+        let b1_b: Fed2<B1, B2> = B1.into();
+        assert!(b1_a.is_same_type1_(&b1_b));
+
+        let b2: Fed2<B1, B2> = B2.into();
+        assert!(!b1_a.is_same_type1_(&b2));
+
     }
 }
