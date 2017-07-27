@@ -56,19 +56,19 @@ macro_rules! init_fed {
             pub trait Fed: Sized {
                 fn is<T>(&self) -> bool
                 where Self: Is_<T> {
-                    <Self as Is_<T>>::is_(&self)
+                    Is_::<T>::is_(self)
                 }
 
                 fn extract<T>(self) -> ::std::result::Result<T, <Self as Extract_<T>>::Lower>
                 where Self: Extract_<T> {
-                    <Self as Extract_<T>>::extract_(self)
+                    Extract_::<T>::extract_(self)
                 }
 
                 fn map_same<T, F>(self, action: F) -> Self
                 where F: Fn(T) -> T,
                       Self: MapSame_<T>
                 {
-                    <Self as MapSame_<T>>::map_same_(self, action)
+                    MapSame_::<T>::map_same_(self, action)
                 }
             }
 
