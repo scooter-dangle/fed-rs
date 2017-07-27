@@ -1859,4 +1859,35 @@ mod test {
 
         assert_eq!(options2, options3);
     }
+
+    pub struct Value(pub ValueT);
+    type ValueT = Fed3<i32, String, Array>;
+    type Array = Vec<Value>;
+    fed!(
+        i32,
+        String,
+        Array,
+    );
+
+    use ::std::ops::Deref;
+    impl Deref for Value {
+        type Target = ValueT;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    impl From<ValueT> for Value {
+        fn from(value: ValueT) -> Self {
+            Value(value)
+        }
+    }
+
+    #[test]
+    fn recursive() {
+        let value: Value = ValueT::from(123).into();
+
+        assert!((*value).is::<i32>());
+    }
 }
