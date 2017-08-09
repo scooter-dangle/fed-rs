@@ -1,6 +1,6 @@
 [package]
 name = "fed"
-version = "0.2.2"
+version = "0.3.0"
 authors = ["Scott Steele <scottlsteele@gmail.com>"]
 
 homepage = "https://github.com/scooter-dangle/fed-rs"

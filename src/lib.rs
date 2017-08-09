@@ -1,3 +1,48 @@
+//! Anonymous, type-based, tagged type unions (here termed 'type federations') in stable Rust
+//!
+//! # Setup
+//! In your crate root, include the crate aliased to `_fed` (since you'll rely on the `init_fed!`
+//! macro to declare the `fed` module):
+//!
+//! ```
+//! #[macro_use]
+//! extern crate fed as _fed;
+//! # fn main() {
+//! # }
+//! ```
+//!
+//! Then, define all of the `fed` traits in your crate with this macro call:
+//!
+//! ```
+//! # #[macro_use]
+//! # extern crate fed as _fed;
+//! init_fed!();
+//! # fn main() {
+//! # }
+//! ```
+//!
+//! To actually use a type federation, you'll need to implement the type federation traits for all
+//! the concrete types you want to comprise the federation, via the `fed!` macro:
+//!
+//! ```
+//! # #[macro_use]
+//! # extern crate fed as _fed;
+//! # init_fed!();
+//! use fed::*;
+//!
+//! fed!(String, bool, u8, Vec<i32>);
+//!
+//! fn main() {
+//!     let var: Fed4<String, bool, u8, Vec<i32>> = 33.into();
+//!     assert!(var.is::<u8>());
+//! }
+//! ```
+//!
+//! For the time being, notice that we unfortunately will need to `use` everything in the `fed`
+//! module anywhere we want to use type federations. If this crate sees any use where this is an
+//! issue, I might work on fixing that. But this is largely intended for prototyping the feature to
+//! determine whether a fully fledged, built-in version would be useful for Rust to have.
+
 // // Doesn't work...complains about duplicate implementations.
 // // Have to implement non-generically (with concrete types)
 //
@@ -28,7 +73,7 @@
 
 #[macro_export]
 macro_rules! basic_fed {
-    ($typename:ident, $($letter:ident => [$enum_var:ident; $arg_name:ident]),*,) => {
+    ($typename:ident, $(($letter:ident, $f_letter:ident) => [$enum_var:ident; $arg_name:ident]),*,) => {
         #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
         pub enum $typename< $($letter),* > {
             $(
@@ -37,10 +82,28 @@ macro_rules! basic_fed {
         }
 
         impl< $($letter),* > $typename< $($letter),* > {
-            pub fn map_all<T>(self, $( $arg_name : &Fn($letter) -> T ),* ) -> T {
+            pub fn map_all<T, $($f_letter),*>(self, $( $arg_name : $f_letter ),* ) -> T
+            where $(
+                $f_letter: FnOnce($letter) -> T
+            ),*
+            {
+                match self { $(
+                    $typename::$enum_var(val) => $arg_name(val)
+                ),* }
+            }
+
+            pub fn as_ref(&self) -> $typename< $(&$letter),* > {
                 match self {
                     $(
-                    $typename::$enum_var(val) => $arg_name(val)
+                    &$typename::$enum_var(ref val) => $typename::$enum_var(val)
+                    ),*
+                }
+            }
+
+            pub fn as_mut(&mut self) -> $typename< $(&mut $letter),* > {
+                match self {
+                    $(
+                    &mut $typename::$enum_var(ref mut val) => $typename::$enum_var(val)
                     ),*
                 }
             }
@@ -48,6 +111,11 @@ macro_rules! basic_fed {
     };
 }
 
+/// Setup macro to be called after including the fed crate
+///
+/// Unfortunately necessary since the type federation properties cannot be implemented generically,
+/// and since the client crate needs to own them in order to be able to implement them for external
+/// types.
 #[macro_export]
 macro_rules! init_fed {
     () => {
@@ -109,12 +177,21 @@ macro_rules! init_fed {
             }
 
             impl<A> Fed1<A> {
-                // `f_1` taking a function pointer instead of being generic over a function
-                // trait is a compromise to avoid requiring the user to have to fill in a
-                // ton of generic params when calling `map_all`
-                pub fn map_all<T>(self, f_1: &Fn(A) -> T) -> T {
+                pub fn map_all<T, F>(self, f_1: F) -> T where F: FnOnce(A) -> T {
                     match self {
                         Fed1::T1(t1) => f_1(t1),
+                    }
+                }
+
+                pub fn as_ref(&self) -> Fed1<&A> {
+                    match self {
+                        &Fed1::T1(ref t1) => Fed1::T1(t1),
+                    }
+                }
+
+                pub fn as_mut(&mut self) -> Fed1<&mut A> {
+                    match self {
+                        &mut Fed1::T1(ref mut t1) => Fed1::T1(t1),
                     }
                 }
 
@@ -123,17 +200,6 @@ macro_rules! init_fed {
                         Fed1::T1(t1) => (Some(t1),),
                     }
                 }
-            }
-
-            #[test]
-            fn map_all() {
-                let var: Fed1<String> = String::from("abc").into();
-                assert_eq!(
-                    var.map_all::<Fed1<_>>(
-                        &|string: String| string.contains('b').into()
-                    ),
-                    true.into()
-                );
             }
 
             impl<A: Sized> Is_<A> for Fed1<A> {
@@ -157,71 +223,71 @@ macro_rules! init_fed {
                 }
             }
 
-            // Don't know how to turn the following `into_tuple` implementations into
-            // macros
-
             basic_fed!{
                 Fed2,
-                A => [T1; f_1],
-                B => [T2; f_2],
+                (A, FA) => [T1; f_1],
+                (B, FB) => [T2; f_2],
             }
 
             basic_fed!{
                 Fed3,
-                A => [T1; f_1],
-                B => [T2; f_2],
-                C => [T3; f_3],
+                (A, FA) => [T1; f_1],
+                (B, FB) => [T2; f_2],
+                (C, FC) => [T3; f_3],
             }
 
             basic_fed!{
                 Fed4,
-                A => [T1; f_1],
-                B => [T2; f_2],
-                C => [T3; f_3],
-                D => [T4; f_4],
+                (A, FA) => [T1; f_1],
+                (B, FB) => [T2; f_2],
+                (C, FC) => [T3; f_3],
+                (D, FD) => [T4; f_4],
             }
 
             basic_fed!{
                 Fed5,
-                A => [T1; f_1],
-                B => [T2; f_2],
-                C => [T3; f_3],
-                D => [T4; f_4],
-                E => [T5; f_5],
+                (A, FA) => [T1; f_1],
+                (B, FB) => [T2; f_2],
+                (C, FC) => [T3; f_3],
+                (D, FD) => [T4; f_4],
+                (E, FE) => [T5; f_5],
             }
 
             basic_fed!{
                 Fed6,
-                A => [T1; f_1],
-                B => [T2; f_2],
-                C => [T3; f_3],
-                D => [T4; f_4],
-                E => [T5; f_5],
-                F => [T6; f_6],
+                (A, FA) => [T1; f_1],
+                (B, FB) => [T2; f_2],
+                (C, FC) => [T3; f_3],
+                (D, FD) => [T4; f_4],
+                (E, FE) => [T5; f_5],
+                (F, FF) => [T6; f_6],
             }
 
             basic_fed!{
                 Fed7,
-                A => [T1; f_1],
-                B => [T2; f_2],
-                C => [T3; f_3],
-                D => [T4; f_4],
-                E => [T5; f_5],
-                F => [T6; f_6],
-                G => [T7; f_7],
+                (A, FA) => [T1; f_1],
+                (B, FB) => [T2; f_2],
+                (C, FC) => [T3; f_3],
+                (D, FD) => [T4; f_4],
+                (E, FE) => [T5; f_5],
+                (F, FF) => [T6; f_6],
+                (G, FG) => [T7; f_7],
             }
 
             basic_fed!{
                 Fed8,
-                A => [T1; f_1],
-                B => [T2; f_2],
-                C => [T3; f_3],
-                D => [T4; f_4],
-                E => [T5; f_5],
-                F => [T6; f_6],
-                G => [T7; f_7],
-                H => [T8; f_8],
+                (A, FA) => [T1; f_1],
+                (B, FB) => [T2; f_2],
+                (C, FC) => [T3; f_3],
+                (D, FD) => [T4; f_4],
+                (E, FE) => [T5; f_5],
+                (F, FF) => [T6; f_6],
+                (G, FG) => [T7; f_7],
+                (H, FH) => [T8; f_8],
             }
+
+            // Don't know how to turn the following `into_tuple` implementations into
+            // macros
 
             impl<A, B> Fed2<A, B> {
                 // Hack to facilitate matching in absence of dedicated `match` syntax for
@@ -314,9 +380,15 @@ macro_rules! init_fed {
 
 #[macro_export]
 macro_rules! from_fed {
-    ($newtype:ty; $a:ty, $enum_var:path) => {
+    ($newtype:ty; $generic:ident; $($component:ty),*; $a:ty, $enum_var:path) => {
         impl ::std::convert::From<$a> for $newtype {
             fn from(val: $a) -> Self {
+                $enum_var(val)
+            }
+        }
+
+        impl<'a> ::std::convert::From<&'a $a> for $generic< $(&'a $component),* > {
+            fn from(val: &'a $a) -> Self {
                 $enum_var(val)
             }
         }
@@ -325,7 +397,7 @@ macro_rules! from_fed {
 
 #[macro_export]
 macro_rules! fed_traits {
-    ($newtype:ty; $a:ty, $enum_var:path, $lower_type:ident, $($b:ty => $b_enum_var:path),*) => {
+    ($newtype:ty; $generic:ident; $($component:ty),*; $a:ty, $enum_var:path, $lower_type:ident, $($b:ty => $b_enum_var:path),*) => {
         impl Is_<$a> for $newtype {
             fn is_(&self) -> bool {
                 match *self {
@@ -338,6 +410,15 @@ macro_rules! fed_traits {
         impl<'a> Is_<$a> for &'a $newtype {
             fn is_(&self) -> bool {
                 match *self {
+                    &$enum_var(_) => true,
+                    _ => false,
+                }
+            }
+        }
+
+        impl<'a> Is_<&'a $a> for $generic< $(&'a $component),* > {
+            fn is_(&self) -> bool {
+                match self {
                     &$enum_var(_) => true,
                     _ => false,
                 }
@@ -358,8 +439,31 @@ macro_rules! fed_traits {
             }
         }
 
+        impl<'a> Extract_<&'a $a> for $generic< $(&'a $component),* > {
+            type Lower = $lower_type< $(&'a $b),* >;
+
+            fn extract_(self) -> ::std::result::Result<&'a $a, Self::Lower> {
+                match self {
+                    $enum_var(val) => ::std::result::Result::Ok(val),
+
+                    $(
+                        $b_enum_var(val) => ::std::result::Result::Err(val.into())
+                    ),*
+                }
+            }
+        }
+
         impl MapSame_<$a> for $newtype {
             fn map_same_<F>(self, action: F) -> Self where F: Fn($a) -> $a {
+                match self {
+                    $enum_var(val) => action(val).into(),
+                    other @ _ => other,
+                }
+            }
+        }
+
+        impl<'a> MapSame_<&'a $a> for $generic< $(&'a $component),* > {
+            fn map_same_<F>(self, action: F) -> Self where F: Fn(&'a $a) -> &'a $a {
                 match self {
                     $enum_var(val) => action(val).into(),
                     other @ _ => other,
@@ -371,9 +475,19 @@ macro_rules! fed_traits {
 
 #[macro_export]
 macro_rules! fed_promotion {
-    ($littletype:ty => $bigtype:ty; $($enum_var:path),+) => {
+    ($generic_0:ident => $generic_1:ident; <$($component_0:ty),*> => <$($component_1:ty),*>; $littletype:ty => $bigtype:ty; $($enum_var:path),+) => {
         impl ::std::convert::From<$littletype> for $bigtype {
             fn from(item: $littletype) -> Self {
+                match item {
+                    $(
+                        $enum_var(val) => val.into()
+                    ),+
+                }
+            }
+        }
+
+        impl<'a> ::std::convert::From< $generic_0< $(&'a $component_0),* > > for $generic_1< $(&'a $component_1),* > {
+            fn from(item: $generic_0< $(&'a $component_0),* >) -> Self {
                 match item {
                     $(
                         $enum_var(val) => val.into()
@@ -384,18 +498,19 @@ macro_rules! fed_promotion {
     };
 }
 
+/// Macro to implement type federation traits for federations of concrete types
 #[macro_export]
 macro_rules! fed {
     ($($a:ty),+,) => { fed!( $($a),+ ); };
     ($a:ty) => {
         // Fed1<A> already generically implemented
     };
-    ($a:ty, $b:ty)                                           => { fed2!($a, $b); };
-    ($a:ty, $b:ty, $c:ty)                                    => { fed3!($a, $b, $c); };
-    ($a:ty, $b:ty, $c:ty, $d:ty)                             => { fed4!($a, $b, $c, $d); };
-    ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty)                      => { fed5!($a, $b, $c, $d, $e); };
-    ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty)               => { fed6!($a, $b, $c, $d, $e, $f); };
-    ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, $g:ty)        => { fed7!($a, $b, $c, $d, $e, $f, $g); };
+    ($a:ty, $b:ty)                                           => { fed2!($a, $b);                         };
+    ($a:ty, $b:ty, $c:ty)                                    => { fed3!($a, $b, $c);                     };
+    ($a:ty, $b:ty, $c:ty, $d:ty)                             => { fed4!($a, $b, $c, $d);                 };
+    ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty)                      => { fed5!($a, $b, $c, $d, $e);             };
+    ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty)               => { fed6!($a, $b, $c, $d, $e, $f);         };
+    ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, $g:ty)        => { fed7!($a, $b, $c, $d, $e, $f, $g);     };
     ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, $g:ty, $h:ty) => { fed8!($a, $b, $c, $d, $e, $f, $g, $h); };
 }
 
@@ -404,19 +519,21 @@ macro_rules! fed2 {
     ($a:ty, $b:ty) => {
         fed2!(Fed2<$a, $b>; $a, $b);
     };
-    ($a:ty, $b:ty, @without_children) => {
+    ($a:ty, $b:ty; @without_children) => {
         fed2!(Fed2<$a, $b>; $a, $b);
     };
     ($newtype:ty; $a:ty, $b:ty) => {
-        from_fed!($newtype; $a, Fed2::T1);
-        from_fed!($newtype; $b, Fed2::T2);
+        fed2!($newtype; generic: Fed2; $a, $b; $a, $b);
+    };
+    ($newtype:ty; generic: $generic:ident; $($component:ty),*; $a:ty, $b:ty) => {
+        from_fed!($newtype; $generic; $($component),*; $a, Fed2::T1);
+        from_fed!($newtype; $generic; $($component),*; $b, Fed2::T2);
 
-        fed_traits!($newtype; $a, Fed2::T1, Fed1, $b => Fed2::T2);
-        fed_traits!($newtype; $b, Fed2::T2, Fed1, $a => Fed2::T1);
+        fed_traits!($newtype; $generic; $($component),*; $a, Fed2::T1, Fed1, $b => Fed2::T2);
+        fed_traits!($newtype; $generic; $($component),*; $b, Fed2::T2, Fed1, $a => Fed2::T1);
 
-        fed_promotion!(Fed1<$a> => Fed2<$a, $b>; Fed1::T1);
-        fed_promotion!(Fed1<$b> => Fed2<$a, $b>; Fed1::T1);
-
+        fed_promotion!(Fed1 => Fed2; <$a> => <$a, $b>; Fed1<$a> => Fed2<$a, $b>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed2; <$b> => <$a, $b>; Fed1<$b> => Fed2<$a, $b>; Fed1::T1);
     };
 }
 
@@ -425,33 +542,36 @@ macro_rules! fed3 {
     ($a:ty, $b:ty, $c:ty) => {
         fed3!(Fed3<$a, $b, $c>; $a, $b, $c);
     };
-    ($a:ty, $b:ty, $c:ty, @without_children) => {
-        fed3!(Fed3<$a, $b, $c>; $a, $b, $c, @without_children);
+    ($a:ty, $b:ty, $c:ty; @without_children) => {
+        fed3!(Fed3<$a, $b, $c>; $a, $b, $c; @without_children);
     };
-    ($newtype:ty; $a:ty, $b:ty, $c:ty, @without_children) => {
-        from_fed!($newtype; $a, Fed3::T1);
-        from_fed!($newtype; $b, Fed3::T2);
-        from_fed!($newtype; $c, Fed3::T3);
+    ($newtype:ty; $a:ty, $b:ty, $c:ty; @without_children) => {
+        fed3!(Fed3<$a, $b, $c>; generic: Fed3; $a, $b, $c; $a, $b, $c; @without_children);
+    };
+    ($newtype:ty; generic: $generic:ident; $($component:ty),*; $a:ty, $b:ty, $c:ty; @without_children) => {
+        from_fed!($newtype; $generic; $($component),*; $a, Fed3::T1);
+        from_fed!($newtype; $generic; $($component),*; $b, Fed3::T2);
+        from_fed!($newtype; $generic; $($component),*; $c, Fed3::T3);
 
-        fed_traits!($newtype; $c, Fed3::T3, Fed2, $a => Fed3::T1, $b => Fed3::T2                );
-        fed_traits!($newtype; $b, Fed3::T2, Fed2, $a => Fed3::T1,                 $c => Fed3::T3);
-        fed_traits!($newtype; $a, Fed3::T1, Fed2,                 $b => Fed3::T2, $c => Fed3::T3);
+        fed_traits!($newtype; $generic; $($component),*; $c, Fed3::T3, Fed2, $a => Fed3::T1, $b => Fed3::T2                );
+        fed_traits!($newtype; $generic; $($component),*; $b, Fed3::T2, Fed2, $a => Fed3::T1,                 $c => Fed3::T3);
+        fed_traits!($newtype; $generic; $($component),*; $a, Fed3::T1, Fed2,                 $b => Fed3::T2, $c => Fed3::T3);
 
-        fed_promotion!(Fed1<$c> => Fed3<$a, $b, $c>; Fed1::T1);
-        fed_promotion!(Fed1<$b> => Fed3<$a, $b, $c>; Fed1::T1);
-        fed_promotion!(Fed1<$a> => Fed3<$a, $b, $c>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed3; <$c> => <$a, $b, $c>; Fed1<$c> => Fed3<$a, $b, $c>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed3; <$b> => <$a, $b, $c>; Fed1<$b> => Fed3<$a, $b, $c>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed3; <$a> => <$a, $b, $c>; Fed1<$a> => Fed3<$a, $b, $c>; Fed1::T1);
 
-        fed_promotion!(Fed2<$b, $c> => Fed3<$a, $b, $c>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $b> => Fed3<$a, $b, $c>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $c> => Fed3<$a, $b, $c>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed3; <$b, $c> => <$a, $b, $c>; Fed2<$b, $c> => Fed3<$a, $b, $c>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed3; <$a, $b> => <$a, $b, $c>; Fed2<$a, $b> => Fed3<$a, $b, $c>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed3; <$a, $c> => <$a, $b, $c>; Fed2<$a, $c> => Fed3<$a, $b, $c>; Fed2::T1, Fed2::T2);
 
     };
     ($newtype:ty; $a:ty, $b:ty, $c:ty) => {
-        fed2!($a, $b,     @without_children);
-        fed2!($a,     $c, @without_children);
-        fed2!(    $b, $c, @without_children);
+        fed2!($a, $b;     @without_children);
+        fed2!($a,     $c; @without_children);
+        fed2!(    $b, $c; @without_children);
 
-        fed3!($newtype; $a, $b, $c, @without_children);
+        fed3!($a, $b, $c; @without_children);
     };
 }
 
@@ -460,52 +580,55 @@ macro_rules! fed4 {
     ($a:ty, $b:ty, $c:ty, $d:ty) => {
         fed4!(Fed4<$a, $b, $c, $d>; $a, $b, $c, $d);
     };
-    ($a:ty, $b:ty, $c:ty, $d:ty, @without_children) => {
-        fed4!(Fed4<$a, $b, $c, $d>; $a, $b, $c, $d, @without_children);
+    ($a:ty, $b:ty, $c:ty, $d:ty; @without_children) => {
+        fed4!(Fed4<$a, $b, $c, $d>; $a, $b, $c, $d; @without_children);
     };
-    ($newtype:ty; $a:ty, $b:ty, $c:ty, $d:ty, @without_children) => {
-        from_fed!($newtype; $a, Fed4::T1);
-        from_fed!($newtype; $b, Fed4::T2);
-        from_fed!($newtype; $c, Fed4::T3);
-        from_fed!($newtype; $d, Fed4::T4);
+    ($newtype:ty; $a:ty, $b:ty, $c:ty, $d:ty; @without_children) => {
+        fed4!(Fed4<$a, $b, $c, $d>; generic: Fed4; $a, $b, $c, $d; $a, $b, $c, $d; @without_children);
+    };
+    ($newtype:ty; generic: $generic:ident; $($component:ty),*; $a:ty, $b:ty, $c:ty, $d:ty; @without_children) => {
+        from_fed!($newtype; $generic; $($component),*; $a, Fed4::T1);
+        from_fed!($newtype; $generic; $($component),*; $b, Fed4::T2);
+        from_fed!($newtype; $generic; $($component),*; $c, Fed4::T3);
+        from_fed!($newtype; $generic; $($component),*; $d, Fed4::T4);
 
-        fed_traits!($newtype; $d, Fed4::T4, Fed3, $a => Fed4::T1, $b => Fed4::T2, $c => Fed4::T3                );
-        fed_traits!($newtype; $c, Fed4::T3, Fed3, $a => Fed4::T1, $b => Fed4::T2,                 $d => Fed4::T4);
-        fed_traits!($newtype; $b, Fed4::T2, Fed3, $a => Fed4::T1,                 $c => Fed4::T3, $d => Fed4::T4);
-        fed_traits!($newtype; $a, Fed4::T1, Fed3,                 $b => Fed4::T2, $c => Fed4::T3, $d => Fed4::T4);
+        fed_traits!($newtype; $generic; $($component),*; $d, Fed4::T4, Fed3, $a => Fed4::T1, $b => Fed4::T2, $c => Fed4::T3                );
+        fed_traits!($newtype; $generic; $($component),*; $c, Fed4::T3, Fed3, $a => Fed4::T1, $b => Fed4::T2,                 $d => Fed4::T4);
+        fed_traits!($newtype; $generic; $($component),*; $b, Fed4::T2, Fed3, $a => Fed4::T1,                 $c => Fed4::T3, $d => Fed4::T4);
+        fed_traits!($newtype; $generic; $($component),*; $a, Fed4::T1, Fed3,                 $b => Fed4::T2, $c => Fed4::T3, $d => Fed4::T4);
 
-        fed_promotion!(Fed1<$d> => Fed4<$a, $b, $c, $d>; Fed1::T1);
-        fed_promotion!(Fed1<$c> => Fed4<$a, $b, $c, $d>; Fed1::T1);
-        fed_promotion!(Fed1<$b> => Fed4<$a, $b, $c, $d>; Fed1::T1);
-        fed_promotion!(Fed1<$a> => Fed4<$a, $b, $c, $d>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed4; <$d> => <$a, $b, $c, $d>; Fed1<$d> => Fed4<$a, $b, $c, $d>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed4; <$c> => <$a, $b, $c, $d>; Fed1<$c> => Fed4<$a, $b, $c, $d>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed4; <$b> => <$a, $b, $c, $d>; Fed1<$b> => Fed4<$a, $b, $c, $d>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed4; <$a> => <$a, $b, $c, $d>; Fed1<$a> => Fed4<$a, $b, $c, $d>; Fed1::T1);
 
-        fed_promotion!(Fed2<$c, $d> => Fed4<$a, $b, $c, $d>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $c> => Fed4<$a, $b, $c, $d>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $d> => Fed4<$a, $b, $c, $d>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $b> => Fed4<$a, $b, $c, $d>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $c> => Fed4<$a, $b, $c, $d>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $d> => Fed4<$a, $b, $c, $d>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed4; <$c, $d> => <$a, $b, $c, $d>; Fed2<$c, $d> => Fed4<$a, $b, $c, $d>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed4; <$b, $c> => <$a, $b, $c, $d>; Fed2<$b, $c> => Fed4<$a, $b, $c, $d>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed4; <$b, $d> => <$a, $b, $c, $d>; Fed2<$b, $d> => Fed4<$a, $b, $c, $d>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed4; <$a, $b> => <$a, $b, $c, $d>; Fed2<$a, $b> => Fed4<$a, $b, $c, $d>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed4; <$a, $c> => <$a, $b, $c, $d>; Fed2<$a, $c> => Fed4<$a, $b, $c, $d>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed4; <$a, $d> => <$a, $b, $c, $d>; Fed2<$a, $d> => Fed4<$a, $b, $c, $d>; Fed2::T1, Fed2::T2);
 
-        fed_promotion!(Fed3<$b, $c, $d> => Fed4<$a, $b, $c, $d>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $c> => Fed4<$a, $b, $c, $d>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $d> => Fed4<$a, $b, $c, $d>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $c, $d> => Fed4<$a, $b, $c, $d>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed4; <$b, $c, $d> => <$a, $b, $c, $d>; Fed3<$b, $c, $d> => Fed4<$a, $b, $c, $d>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed4; <$a, $b, $c> => <$a, $b, $c, $d>; Fed3<$a, $b, $c> => Fed4<$a, $b, $c, $d>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed4; <$a, $b, $d> => <$a, $b, $c, $d>; Fed3<$a, $b, $d> => Fed4<$a, $b, $c, $d>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed4; <$a, $c, $d> => <$a, $b, $c, $d>; Fed3<$a, $c, $d> => Fed4<$a, $b, $c, $d>; Fed3::T1, Fed3::T2, Fed3::T3);
 
     };
     ($newtype:ty; $a:ty, $b:ty, $c:ty, $d:ty) => {
-        fed3!($a, $b, $c,     @without_children);
-        fed3!($a, $b,     $d, @without_children);
-        fed3!($a,     $c, $d, @without_children);
-        fed3!(    $b, $c, $d, @without_children);
+        fed3!($a, $b, $c;     @without_children);
+        fed3!($a, $b,     $d; @without_children);
+        fed3!($a,     $c, $d; @without_children);
+        fed3!(    $b, $c, $d; @without_children);
 
-        fed2!($a, $b,         @without_children);
-        fed2!($a,     $c,     @without_children);
-        fed2!($a,         $d, @without_children);
-        fed2!(    $b, $c,     @without_children);
-        fed2!(    $b,     $d, @without_children);
-        fed2!(        $c, $d, @without_children);
+        fed2!($a, $b;         @without_children);
+        fed2!($a,     $c;     @without_children);
+        fed2!($a,         $d; @without_children);
+        fed2!(    $b, $c;     @without_children);
+        fed2!(    $b,     $d; @without_children);
+        fed2!(        $c, $d; @without_children);
 
-        fed4!($newtype; $a, $b, $c, $d, @without_children);
+        fed4!($newtype; $a, $b, $c, $d; @without_children);
     };
 }
 
@@ -514,87 +637,90 @@ macro_rules! fed5 {
     ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty) => {
         fed5!(Fed5<$a, $b, $c, $d, $e>; $a, $b, $c, $d, $e);
     };
-    ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty, @without_children) => {
-        fed5!(Fed5<$a, $b, $c, $d, $e>; $a, $b, $c, $d, $e, @without_children);
+    ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty; @without_children) => {
+        fed5!(Fed5<$a, $b, $c, $d, $e>; $a, $b, $c, $d, $e; @without_children);
     };
-    ($newtype:ty; $a:ty, $b:ty, $c:ty, $d:ty, $e:ty, @without_children) => {
-        from_fed!($newtype; $a, Fed5::T1);
-        from_fed!($newtype; $b, Fed5::T2);
-        from_fed!($newtype; $c, Fed5::T3);
-        from_fed!($newtype; $d, Fed5::T4);
-        from_fed!($newtype; $e, Fed5::T5);
+    ($newtype:ty; $a:ty, $b:ty, $c:ty, $d:ty, $e:ty; @without_children) => {
+        fed5!(Fed5<$a, $b, $c, $d, $e>; generic: Fed5; $a, $b, $c, $d, $e; $a, $b, $c, $d, $e; @without_children);
+    };
+    ($newtype:ty; generic: $generic:ident; $($component:ty),*; $a:ty, $b:ty, $c:ty, $d:ty, $e:ty; @without_children) => {
+        from_fed!($newtype; $generic; $($component),*; $a, Fed5::T1);
+        from_fed!($newtype; $generic; $($component),*; $b, Fed5::T2);
+        from_fed!($newtype; $generic; $($component),*; $c, Fed5::T3);
+        from_fed!($newtype; $generic; $($component),*; $d, Fed5::T4);
+        from_fed!($newtype; $generic; $($component),*; $e, Fed5::T5);
 
-        fed_traits!($newtype; $e, Fed5::T5, Fed4, $a => Fed5::T1, $b => Fed5::T2, $c => Fed5::T3, $d => Fed5::T4                );
-        fed_traits!($newtype; $d, Fed5::T4, Fed4, $a => Fed5::T1, $b => Fed5::T2, $c => Fed5::T3,                 $e => Fed5::T5);
-        fed_traits!($newtype; $c, Fed5::T3, Fed4, $a => Fed5::T1, $b => Fed5::T2,                 $d => Fed5::T4, $e => Fed5::T5);
-        fed_traits!($newtype; $b, Fed5::T2, Fed4, $a => Fed5::T1,                 $c => Fed5::T3, $d => Fed5::T4, $e => Fed5::T5);
-        fed_traits!($newtype; $a, Fed5::T1, Fed4,                 $b => Fed5::T2, $c => Fed5::T3, $d => Fed5::T4, $e => Fed5::T5);
+        fed_traits!($newtype; $generic; $($component),*; $e, Fed5::T5, Fed4, $a => Fed5::T1, $b => Fed5::T2, $c => Fed5::T3, $d => Fed5::T4                );
+        fed_traits!($newtype; $generic; $($component),*; $d, Fed5::T4, Fed4, $a => Fed5::T1, $b => Fed5::T2, $c => Fed5::T3,                 $e => Fed5::T5);
+        fed_traits!($newtype; $generic; $($component),*; $c, Fed5::T3, Fed4, $a => Fed5::T1, $b => Fed5::T2,                 $d => Fed5::T4, $e => Fed5::T5);
+        fed_traits!($newtype; $generic; $($component),*; $b, Fed5::T2, Fed4, $a => Fed5::T1,                 $c => Fed5::T3, $d => Fed5::T4, $e => Fed5::T5);
+        fed_traits!($newtype; $generic; $($component),*; $a, Fed5::T1, Fed4,                 $b => Fed5::T2, $c => Fed5::T3, $d => Fed5::T4, $e => Fed5::T5);
 
-        fed_promotion!(Fed1<$e> => Fed5<$a, $b, $c, $d, $e>; Fed1::T1);
-        fed_promotion!(Fed1<$d> => Fed5<$a, $b, $c, $d, $e>; Fed1::T1);
-        fed_promotion!(Fed1<$c> => Fed5<$a, $b, $c, $d, $e>; Fed1::T1);
-        fed_promotion!(Fed1<$b> => Fed5<$a, $b, $c, $d, $e>; Fed1::T1);
-        fed_promotion!(Fed1<$a> => Fed5<$a, $b, $c, $d, $e>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed5; <$e> => <$a, $b, $c, $d, $e>; Fed1<$e> => Fed5<$a, $b, $c, $d, $e>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed5; <$d> => <$a, $b, $c, $d, $e>; Fed1<$d> => Fed5<$a, $b, $c, $d, $e>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed5; <$c> => <$a, $b, $c, $d, $e>; Fed1<$c> => Fed5<$a, $b, $c, $d, $e>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed5; <$b> => <$a, $b, $c, $d, $e>; Fed1<$b> => Fed5<$a, $b, $c, $d, $e>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed5; <$a> => <$a, $b, $c, $d, $e>; Fed1<$a> => Fed5<$a, $b, $c, $d, $e>; Fed1::T1);
 
-        fed_promotion!(Fed2<$d, $e> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$c, $d> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$c, $e> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $c> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $d> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $e> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $b> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $c> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $d> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $e> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed5; <$d, $e> => <$a, $b, $c, $d, $e>; Fed2<$d, $e> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed5; <$c, $d> => <$a, $b, $c, $d, $e>; Fed2<$c, $d> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed5; <$c, $e> => <$a, $b, $c, $d, $e>; Fed2<$c, $e> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed5; <$b, $c> => <$a, $b, $c, $d, $e>; Fed2<$b, $c> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed5; <$b, $d> => <$a, $b, $c, $d, $e>; Fed2<$b, $d> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed5; <$b, $e> => <$a, $b, $c, $d, $e>; Fed2<$b, $e> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed5; <$a, $b> => <$a, $b, $c, $d, $e>; Fed2<$a, $b> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed5; <$a, $c> => <$a, $b, $c, $d, $e>; Fed2<$a, $c> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed5; <$a, $d> => <$a, $b, $c, $d, $e>; Fed2<$a, $d> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed5; <$a, $e> => <$a, $b, $c, $d, $e>; Fed2<$a, $e> => Fed5<$a, $b, $c, $d, $e>; Fed2::T1, Fed2::T2);
 
-        fed_promotion!(Fed3<$c, $d, $e> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $c, $d> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $c, $e> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $d, $e> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $c> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $d> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $e> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $c, $d> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $c, $e> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $d, $e> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed5; <$c, $d, $e> => <$a, $b, $c, $d, $e>; Fed3<$c, $d, $e> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed5; <$b, $c, $d> => <$a, $b, $c, $d, $e>; Fed3<$b, $c, $d> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed5; <$b, $c, $e> => <$a, $b, $c, $d, $e>; Fed3<$b, $c, $e> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed5; <$b, $d, $e> => <$a, $b, $c, $d, $e>; Fed3<$b, $d, $e> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed5; <$a, $b, $c> => <$a, $b, $c, $d, $e>; Fed3<$a, $b, $c> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed5; <$a, $b, $d> => <$a, $b, $c, $d, $e>; Fed3<$a, $b, $d> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed5; <$a, $b, $e> => <$a, $b, $c, $d, $e>; Fed3<$a, $b, $e> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed5; <$a, $c, $d> => <$a, $b, $c, $d, $e>; Fed3<$a, $c, $d> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed5; <$a, $c, $e> => <$a, $b, $c, $d, $e>; Fed3<$a, $c, $e> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed5; <$a, $d, $e> => <$a, $b, $c, $d, $e>; Fed3<$a, $d, $e> => Fed5<$a, $b, $c, $d, $e>; Fed3::T1, Fed3::T2, Fed3::T3);
 
-        fed_promotion!(Fed4<$b, $c, $d, $e> => Fed5<$a, $b, $c, $d, $e>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $c, $d> => Fed5<$a, $b, $c, $d, $e>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $c, $e> => Fed5<$a, $b, $c, $d, $e>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $d, $e> => Fed5<$a, $b, $c, $d, $e>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $c, $d, $e> => Fed5<$a, $b, $c, $d, $e>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed5; <$b, $c, $d, $e> => <$a, $b, $c, $d, $e>; Fed4<$b, $c, $d, $e> => Fed5<$a, $b, $c, $d, $e>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed5; <$a, $b, $c, $d> => <$a, $b, $c, $d, $e>; Fed4<$a, $b, $c, $d> => Fed5<$a, $b, $c, $d, $e>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed5; <$a, $b, $c, $e> => <$a, $b, $c, $d, $e>; Fed4<$a, $b, $c, $e> => Fed5<$a, $b, $c, $d, $e>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed5; <$a, $b, $d, $e> => <$a, $b, $c, $d, $e>; Fed4<$a, $b, $d, $e> => Fed5<$a, $b, $c, $d, $e>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed5; <$a, $c, $d, $e> => <$a, $b, $c, $d, $e>; Fed4<$a, $c, $d, $e> => Fed5<$a, $b, $c, $d, $e>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
 
     };
     ($newtype:ty; $a:ty, $b:ty, $c:ty, $d:ty, $e:ty) => {
-        fed4!($a, $b, $c, $d,     @without_children);
-        fed4!($a, $b, $c,     $e, @without_children);
-        fed4!($a, $b,     $d, $e, @without_children);
-        fed4!($a,     $c, $d, $e, @without_children);
-        fed4!(    $b, $c, $d, $e, @without_children);
+        fed4!($a, $b, $c, $d;     @without_children);
+        fed4!($a, $b, $c,     $e; @without_children);
+        fed4!($a, $b,     $d, $e; @without_children);
+        fed4!($a,     $c, $d, $e; @without_children);
+        fed4!(    $b, $c, $d, $e; @without_children);
 
-        fed3!($a, $b, $c,         @without_children);
-        fed3!($a, $b,     $d,     @without_children);
-        fed3!($a, $b,         $e, @without_children);
-        fed3!($a,     $c, $d,     @without_children);
-        fed3!($a,     $c,     $e, @without_children);
-        fed3!($a, $d,         $e, @without_children);
-        fed3!(    $b, $c, $d,     @without_children);
-        fed3!(    $b, $c,     $e, @without_children);
-        fed3!(    $b,     $d, $e, @without_children);
-        fed3!(        $c, $d, $e, @without_children);
+        fed3!($a, $b, $c;         @without_children);
+        fed3!($a, $b,     $d;     @without_children);
+        fed3!($a, $b,         $e; @without_children);
+        fed3!($a,     $c, $d;     @without_children);
+        fed3!($a,     $c,     $e; @without_children);
+        fed3!($a, $d,         $e; @without_children);
+        fed3!(    $b, $c, $d;     @without_children);
+        fed3!(    $b, $c,     $e; @without_children);
+        fed3!(    $b,     $d, $e; @without_children);
+        fed3!(        $c, $d, $e; @without_children);
 
-        fed2!($a, $b,             @without_children);
-        fed2!($a,     $c,         @without_children);
-        fed2!($a,         $d,     @without_children);
-        fed2!($a,             $e, @without_children);
-        fed2!(    $b, $c,         @without_children);
-        fed2!(    $b,     $d,     @without_children);
-        fed2!(    $b,         $e, @without_children);
-        fed2!(        $c, $d,     @without_children);
-        fed2!(        $c,     $e, @without_children);
-        fed2!(            $d, $e, @without_children);
+        fed2!($a, $b;             @without_children);
+        fed2!($a,     $c;         @without_children);
+        fed2!($a,         $d;     @without_children);
+        fed2!($a,             $e; @without_children);
+        fed2!(    $b, $c;         @without_children);
+        fed2!(    $b,     $d;     @without_children);
+        fed2!(    $b,         $e; @without_children);
+        fed2!(        $c, $d;     @without_children);
+        fed2!(        $c,     $e; @without_children);
+        fed2!(            $d, $e; @without_children);
 
-        fed5!($newtype; $a, $b, $c, $d, $e, @without_children);
+        fed5!($newtype; $a, $b, $c, $d, $e; @without_children);
     };
 }
 
@@ -603,154 +729,157 @@ macro_rules! fed6 {
     ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty) => {
         fed6!(Fed6<$a, $b, $c, $d, $e, $f>; $a, $b, $c, $d, $e, $f);
     };
-    ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, @without_children) => {
-        fed6!(Fed6<$a, $b, $c, $d, $e, $f>; $a, $b, $c, $d, $e, $f, @without_children);
+    ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty; @without_children) => {
+        fed6!(Fed6<$a, $b, $c, $d, $e, $f>; $a, $b, $c, $d, $e, $f; @without_children);
     };
-    ($newtype:ty; $a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, @without_children) => {
-        from_fed!($newtype; $a, Fed6::T1);
-        from_fed!($newtype; $b, Fed6::T2);
-        from_fed!($newtype; $c, Fed6::T3);
-        from_fed!($newtype; $d, Fed6::T4);
-        from_fed!($newtype; $e, Fed6::T5);
-        from_fed!($newtype; $f, Fed6::T6);
+    ($newtype:ty; $a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty; @without_children) => {
+        fed6!(Fed6<$a, $b, $c, $d, $e, $f>; generic: Fed6; $a, $b, $c, $d, $e, $f; $a, $b, $c, $d, $e, $f; @without_children);
+    };
+    ($newtype:ty; generic: $generic:ident; $($component:ty),*; $a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty; @without_children) => {
+        from_fed!($newtype; $generic; $($component),*; $a, Fed6::T1);
+        from_fed!($newtype; $generic; $($component),*; $b, Fed6::T2);
+        from_fed!($newtype; $generic; $($component),*; $c, Fed6::T3);
+        from_fed!($newtype; $generic; $($component),*; $d, Fed6::T4);
+        from_fed!($newtype; $generic; $($component),*; $e, Fed6::T5);
+        from_fed!($newtype; $generic; $($component),*; $f, Fed6::T6);
 
-        fed_traits!($newtype; $f, Fed6::T6, Fed5, $a => Fed6::T1, $b => Fed6::T2, $c => Fed6::T3, $d => Fed6::T4, $e => Fed6::T5                );
-        fed_traits!($newtype; $e, Fed6::T5, Fed5, $a => Fed6::T1, $b => Fed6::T2, $c => Fed6::T3, $d => Fed6::T4,                 $f => Fed6::T6);
-        fed_traits!($newtype; $d, Fed6::T4, Fed5, $a => Fed6::T1, $b => Fed6::T2, $c => Fed6::T3,                 $e => Fed6::T5, $f => Fed6::T6);
-        fed_traits!($newtype; $c, Fed6::T3, Fed5, $a => Fed6::T1, $b => Fed6::T2,                 $d => Fed6::T4, $e => Fed6::T5, $f => Fed6::T6);
-        fed_traits!($newtype; $b, Fed6::T2, Fed5, $a => Fed6::T1,                 $c => Fed6::T3, $d => Fed6::T4, $e => Fed6::T5, $f => Fed6::T6);
-        fed_traits!($newtype; $a, Fed6::T1, Fed5,                 $b => Fed6::T2, $c => Fed6::T3, $d => Fed6::T4, $e => Fed6::T5, $f => Fed6::T6);
+        fed_traits!($newtype; $generic; $($component),*; $f, Fed6::T6, Fed5, $a => Fed6::T1, $b => Fed6::T2, $c => Fed6::T3, $d => Fed6::T4, $e => Fed6::T5                );
+        fed_traits!($newtype; $generic; $($component),*; $e, Fed6::T5, Fed5, $a => Fed6::T1, $b => Fed6::T2, $c => Fed6::T3, $d => Fed6::T4,                 $f => Fed6::T6);
+        fed_traits!($newtype; $generic; $($component),*; $d, Fed6::T4, Fed5, $a => Fed6::T1, $b => Fed6::T2, $c => Fed6::T3,                 $e => Fed6::T5, $f => Fed6::T6);
+        fed_traits!($newtype; $generic; $($component),*; $c, Fed6::T3, Fed5, $a => Fed6::T1, $b => Fed6::T2,                 $d => Fed6::T4, $e => Fed6::T5, $f => Fed6::T6);
+        fed_traits!($newtype; $generic; $($component),*; $b, Fed6::T2, Fed5, $a => Fed6::T1,                 $c => Fed6::T3, $d => Fed6::T4, $e => Fed6::T5, $f => Fed6::T6);
+        fed_traits!($newtype; $generic; $($component),*; $a, Fed6::T1, Fed5,                 $b => Fed6::T2, $c => Fed6::T3, $d => Fed6::T4, $e => Fed6::T5, $f => Fed6::T6);
 
-        fed_promotion!(Fed1<$f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed1::T1);
-        fed_promotion!(Fed1<$e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed1::T1);
-        fed_promotion!(Fed1<$d> => Fed6<$a, $b, $c, $d, $e, $f>; Fed1::T1);
-        fed_promotion!(Fed1<$c> => Fed6<$a, $b, $c, $d, $e, $f>; Fed1::T1);
-        fed_promotion!(Fed1<$b> => Fed6<$a, $b, $c, $d, $e, $f>; Fed1::T1);
-        fed_promotion!(Fed1<$a> => Fed6<$a, $b, $c, $d, $e, $f>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed6; <$f> => <$a, $b, $c, $d, $e, $f>; Fed1<$f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed6; <$e> => <$a, $b, $c, $d, $e, $f>; Fed1<$e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed6; <$d> => <$a, $b, $c, $d, $e, $f>; Fed1<$d> => Fed6<$a, $b, $c, $d, $e, $f>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed6; <$c> => <$a, $b, $c, $d, $e, $f>; Fed1<$c> => Fed6<$a, $b, $c, $d, $e, $f>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed6; <$b> => <$a, $b, $c, $d, $e, $f>; Fed1<$b> => Fed6<$a, $b, $c, $d, $e, $f>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed6; <$a> => <$a, $b, $c, $d, $e, $f>; Fed1<$a> => Fed6<$a, $b, $c, $d, $e, $f>; Fed1::T1);
 
-        fed_promotion!(Fed2<$e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$d, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$d, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$c, $d> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$c, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$c, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $c> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $d> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $b> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $c> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $d> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed6; <$e, $f> => <$a, $b, $c, $d, $e, $f>; Fed2<$e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed6; <$d, $e> => <$a, $b, $c, $d, $e, $f>; Fed2<$d, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed6; <$d, $f> => <$a, $b, $c, $d, $e, $f>; Fed2<$d, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed6; <$c, $d> => <$a, $b, $c, $d, $e, $f>; Fed2<$c, $d> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed6; <$c, $e> => <$a, $b, $c, $d, $e, $f>; Fed2<$c, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed6; <$c, $f> => <$a, $b, $c, $d, $e, $f>; Fed2<$c, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed6; <$b, $c> => <$a, $b, $c, $d, $e, $f>; Fed2<$b, $c> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed6; <$b, $d> => <$a, $b, $c, $d, $e, $f>; Fed2<$b, $d> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed6; <$b, $e> => <$a, $b, $c, $d, $e, $f>; Fed2<$b, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed6; <$b, $f> => <$a, $b, $c, $d, $e, $f>; Fed2<$b, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed6; <$a, $b> => <$a, $b, $c, $d, $e, $f>; Fed2<$a, $b> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed6; <$a, $c> => <$a, $b, $c, $d, $e, $f>; Fed2<$a, $c> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed6; <$a, $d> => <$a, $b, $c, $d, $e, $f>; Fed2<$a, $d> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed6; <$a, $e> => <$a, $b, $c, $d, $e, $f>; Fed2<$a, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed6; <$a, $f> => <$a, $b, $c, $d, $e, $f>; Fed2<$a, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed2::T1, Fed2::T2);
 
-        fed_promotion!(Fed3<$d, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $d, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $d, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $c, $d> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $c, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $c, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $d, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $d, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $c> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $d> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $c, $d> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $c, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $c, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $d, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $d, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$d, $e, $f> => <$a, $b, $c, $d, $e, $f>; Fed3<$d, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$c, $d, $e> => <$a, $b, $c, $d, $e, $f>; Fed3<$c, $d, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$c, $d, $f> => <$a, $b, $c, $d, $e, $f>; Fed3<$c, $d, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$c, $e, $f> => <$a, $b, $c, $d, $e, $f>; Fed3<$c, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$b, $c, $d> => <$a, $b, $c, $d, $e, $f>; Fed3<$b, $c, $d> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$b, $c, $e> => <$a, $b, $c, $d, $e, $f>; Fed3<$b, $c, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$b, $c, $f> => <$a, $b, $c, $d, $e, $f>; Fed3<$b, $c, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$b, $d, $e> => <$a, $b, $c, $d, $e, $f>; Fed3<$b, $d, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$b, $d, $f> => <$a, $b, $c, $d, $e, $f>; Fed3<$b, $d, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$b, $e, $f> => <$a, $b, $c, $d, $e, $f>; Fed3<$b, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$a, $b, $c> => <$a, $b, $c, $d, $e, $f>; Fed3<$a, $b, $c> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$a, $b, $d> => <$a, $b, $c, $d, $e, $f>; Fed3<$a, $b, $d> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$a, $b, $e> => <$a, $b, $c, $d, $e, $f>; Fed3<$a, $b, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$a, $b, $f> => <$a, $b, $c, $d, $e, $f>; Fed3<$a, $b, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$a, $c, $d> => <$a, $b, $c, $d, $e, $f>; Fed3<$a, $c, $d> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$a, $c, $e> => <$a, $b, $c, $d, $e, $f>; Fed3<$a, $c, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$a, $c, $f> => <$a, $b, $c, $d, $e, $f>; Fed3<$a, $c, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$a, $d, $e> => <$a, $b, $c, $d, $e, $f>; Fed3<$a, $d, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$a, $d, $f> => <$a, $b, $c, $d, $e, $f>; Fed3<$a, $d, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed6; <$a, $e, $f> => <$a, $b, $c, $d, $e, $f>; Fed3<$a, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed3::T1, Fed3::T2, Fed3::T3);
 
-        fed_promotion!(Fed4<$c, $d, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $d, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $d, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $d, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $c, $d> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $c, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $c, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $d, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $d, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $c, $d, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $c, $d, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $c, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $d, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed6; <$c, $d, $e, $f> => <$a, $b, $c, $d, $e, $f>; Fed4<$c, $d, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed6; <$b, $c, $d, $e> => <$a, $b, $c, $d, $e, $f>; Fed4<$b, $c, $d, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed6; <$b, $c, $d, $f> => <$a, $b, $c, $d, $e, $f>; Fed4<$b, $c, $d, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed6; <$b, $c, $e, $f> => <$a, $b, $c, $d, $e, $f>; Fed4<$b, $c, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed6; <$b, $d, $e, $f> => <$a, $b, $c, $d, $e, $f>; Fed4<$b, $d, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed6; <$a, $b, $c, $d> => <$a, $b, $c, $d, $e, $f>; Fed4<$a, $b, $c, $d> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed6; <$a, $b, $c, $e> => <$a, $b, $c, $d, $e, $f>; Fed4<$a, $b, $c, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed6; <$a, $b, $c, $f> => <$a, $b, $c, $d, $e, $f>; Fed4<$a, $b, $c, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed6; <$a, $b, $d, $e> => <$a, $b, $c, $d, $e, $f>; Fed4<$a, $b, $d, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed6; <$a, $b, $d, $f> => <$a, $b, $c, $d, $e, $f>; Fed4<$a, $b, $d, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed6; <$a, $b, $e, $f> => <$a, $b, $c, $d, $e, $f>; Fed4<$a, $b, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed6; <$a, $c, $d, $e> => <$a, $b, $c, $d, $e, $f>; Fed4<$a, $c, $d, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed6; <$a, $c, $d, $f> => <$a, $b, $c, $d, $e, $f>; Fed4<$a, $c, $d, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed6; <$a, $c, $e, $f> => <$a, $b, $c, $d, $e, $f>; Fed4<$a, $c, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed6; <$a, $d, $e, $f> => <$a, $b, $c, $d, $e, $f>; Fed4<$a, $d, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
 
-        fed_promotion!(Fed5<$b, $c, $d, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $c, $d, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $c, $d, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $c, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $d, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $c, $d, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed6; <$b, $c, $d, $e, $f> => <$a, $b, $c, $d, $e, $f>; Fed5<$b, $c, $d, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed6; <$a, $b, $c, $d, $e> => <$a, $b, $c, $d, $e, $f>; Fed5<$a, $b, $c, $d, $e> => Fed6<$a, $b, $c, $d, $e, $f>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed6; <$a, $b, $c, $d, $f> => <$a, $b, $c, $d, $e, $f>; Fed5<$a, $b, $c, $d, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed6; <$a, $b, $c, $e, $f> => <$a, $b, $c, $d, $e, $f>; Fed5<$a, $b, $c, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed6; <$a, $b, $d, $e, $f> => <$a, $b, $c, $d, $e, $f>; Fed5<$a, $b, $d, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed6; <$a, $c, $d, $e, $f> => <$a, $b, $c, $d, $e, $f>; Fed5<$a, $c, $d, $e, $f> => Fed6<$a, $b, $c, $d, $e, $f>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
 
     };
     ($newtype:ty; $a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty) => {
-        fed5!($a, $b, $c, $d, $e,     @without_children);
-        fed5!($a, $b, $c, $d,     $f, @without_children);
-        fed5!($a, $b, $c,     $e, $f, @without_children);
-        fed5!($a, $b,     $d, $e, $f, @without_children);
-        fed5!($a,     $c, $d, $e, $f, @without_children);
-        fed5!(    $b, $c, $d, $e, $f, @without_children);
+        fed5!($a, $b, $c, $d, $e;     @without_children);
+        fed5!($a, $b, $c, $d,     $f; @without_children);
+        fed5!($a, $b, $c,     $e, $f; @without_children);
+        fed5!($a, $b,     $d, $e, $f; @without_children);
+        fed5!($a,     $c, $d, $e, $f; @without_children);
+        fed5!(    $b, $c, $d, $e, $f; @without_children);
 
-        fed4!($a, $b, $c, $d,         @without_children);
-        fed4!($a, $b, $c,     $e,     @without_children);
-        fed4!($a, $b, $c,         $f, @without_children);
-        fed4!($a, $b,     $d, $e,     @without_children);
-        fed4!($a, $b,     $d,     $f, @without_children);
-        fed4!($a, $b,         $e, $f, @without_children);
-        fed4!($a,     $c, $d, $e,     @without_children);
-        fed4!($a,     $c, $d,     $f, @without_children);
-        fed4!($a,     $c,     $e, $f, @without_children);
-        fed4!($a,         $d, $e, $f, @without_children);
-        fed4!(    $b, $c, $d, $e,     @without_children);
-        fed4!(    $b, $c, $d,     $f, @without_children);
-        fed4!(    $b, $c,     $e, $f, @without_children);
-        fed4!(    $b,     $d, $e, $f, @without_children);
-        fed4!(        $c, $d, $e, $f, @without_children);
+        fed4!($a, $b, $c, $d;         @without_children);
+        fed4!($a, $b, $c,     $e;     @without_children);
+        fed4!($a, $b, $c,         $f; @without_children);
+        fed4!($a, $b,     $d, $e;     @without_children);
+        fed4!($a, $b,     $d,     $f; @without_children);
+        fed4!($a, $b,         $e, $f; @without_children);
+        fed4!($a,     $c, $d, $e;     @without_children);
+        fed4!($a,     $c, $d,     $f; @without_children);
+        fed4!($a,     $c,     $e, $f; @without_children);
+        fed4!($a,         $d, $e, $f; @without_children);
+        fed4!(    $b, $c, $d, $e;     @without_children);
+        fed4!(    $b, $c, $d,     $f; @without_children);
+        fed4!(    $b, $c,     $e, $f; @without_children);
+        fed4!(    $b,     $d, $e, $f; @without_children);
+        fed4!(        $c, $d, $e, $f; @without_children);
 
-        fed3!($a, $b, $c,             @without_children);
-        fed3!($a, $b,     $d,         @without_children);
-        fed3!($a, $b,         $e,     @without_children);
-        fed3!($a,     $c, $d,         @without_children);
-        fed3!($a,     $c,     $e,     @without_children);
-        fed3!($a,         $d, $e,     @without_children);
-        fed3!(    $b, $c, $d,         @without_children);
-        fed3!(    $b, $c,     $e,     @without_children);
-        fed3!(    $b,     $d, $e,     @without_children);
-        fed3!(        $c, $d, $e,     @without_children);
-        fed3!($a, $b,             $f, @without_children);
-        fed3!($a,     $c,         $f, @without_children);
-        fed3!($a,         $d,     $f, @without_children);
-        fed3!($a,             $e, $f, @without_children);
-        fed3!(    $b, $c,         $f, @without_children);
-        fed3!(    $b,     $d,     $f, @without_children);
-        fed3!(    $b,         $e, $f, @without_children);
-        fed3!(        $c, $d,     $f, @without_children);
-        fed3!(        $c,     $e, $f, @without_children);
-        fed3!(            $d, $e, $f, @without_children);
+        fed3!($a, $b, $c;             @without_children);
+        fed3!($a, $b,     $d;         @without_children);
+        fed3!($a, $b,         $e;     @without_children);
+        fed3!($a,     $c, $d;         @without_children);
+        fed3!($a,     $c,     $e;     @without_children);
+        fed3!($a,         $d, $e;     @without_children);
+        fed3!(    $b, $c, $d;         @without_children);
+        fed3!(    $b, $c,     $e;     @without_children);
+        fed3!(    $b,     $d, $e;     @without_children);
+        fed3!(        $c, $d, $e;     @without_children);
+        fed3!($a, $b,             $f; @without_children);
+        fed3!($a,     $c,         $f; @without_children);
+        fed3!($a,         $d,     $f; @without_children);
+        fed3!($a,             $e, $f; @without_children);
+        fed3!(    $b, $c,         $f; @without_children);
+        fed3!(    $b,     $d,     $f; @without_children);
+        fed3!(    $b,         $e, $f; @without_children);
+        fed3!(        $c, $d,     $f; @without_children);
+        fed3!(        $c,     $e, $f; @without_children);
+        fed3!(            $d, $e, $f; @without_children);
 
-        fed2!($a, $b,                 @without_children);
-        fed2!($a,     $c,             @without_children);
-        fed2!($a,         $d,         @without_children);
-        fed2!($a,             $e,     @without_children);
-        fed2!($a,                 $f, @without_children);
-        fed2!(    $b, $c,             @without_children);
-        fed2!(    $b,     $d,         @without_children);
-        fed2!(    $b,         $e,     @without_children);
-        fed2!(    $b,             $f, @without_children);
-        fed2!(        $c, $d,         @without_children);
-        fed2!(        $c,     $e,     @without_children);
-        fed2!(        $c,         $f, @without_children);
-        fed2!(            $d, $e,     @without_children);
-        fed2!(            $d,     $f, @without_children);
-        fed2!(                $e, $f, @without_children);
+        fed2!($a, $b;                 @without_children);
+        fed2!($a,     $c;             @without_children);
+        fed2!($a,         $d;         @without_children);
+        fed2!($a,             $e;     @without_children);
+        fed2!($a,                 $f; @without_children);
+        fed2!(    $b, $c;             @without_children);
+        fed2!(    $b,     $d;         @without_children);
+        fed2!(    $b,         $e;     @without_children);
+        fed2!(    $b,             $f; @without_children);
+        fed2!(        $c, $d;         @without_children);
+        fed2!(        $c,     $e;     @without_children);
+        fed2!(        $c,         $f; @without_children);
+        fed2!(            $d, $e;     @without_children);
+        fed2!(            $d,     $f; @without_children);
+        fed2!(                $e, $f; @without_children);
 
-        fed6!($newtype; $a, $b, $c, $d, $e, $f, @without_children);
+        fed6!($newtype; $a, $b, $c, $d, $e, $f; @without_children);
     };
 }
 
@@ -759,284 +888,287 @@ macro_rules! fed7 {
     ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, $g:ty) => {
         fed7!(Fed7<$a, $b, $c, $d, $e, $f, $g>; $a, $b, $c, $d, $e, $f, $g);
     };
-    ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, $g:ty, @without_children) => {
-        fed7!(Fed7<$a, $b, $c, $d, $e, $f, $g>; $a, $b, $c, $d, $e, $f, $g, @without_children);
+    ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, $g:ty; @without_children) => {
+        fed7!(Fed7<$a, $b, $c, $d, $e, $f, $g>; $a, $b, $c, $d, $e, $f, $g; @without_children);
     };
-    ($newtype:ty; $a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, $g:ty, @without_children) => {
-        from_fed!($newtype; $a, Fed7::T1);
-        from_fed!($newtype; $b, Fed7::T2);
-        from_fed!($newtype; $c, Fed7::T3);
-        from_fed!($newtype; $d, Fed7::T4);
-        from_fed!($newtype; $e, Fed7::T5);
-        from_fed!($newtype; $f, Fed7::T6);
-        from_fed!($newtype; $g, Fed7::T7);
+    ($newtype:ty; $a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, $g:ty; @without_children) => {
+        fed7!(Fed7<$a, $b, $c, $d, $e, $f, $g>; generic: Fed7; $a, $b, $c, $d, $e, $f, $g; $a, $b, $c, $d, $e, $f, $g; @without_children);
+    };
+    ($newtype:ty; generic: $generic:ident; $($component:ty),*; $a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, $g:ty; @without_children) => {
+        from_fed!($newtype; $generic; $($component),*; $a, Fed7::T1);
+        from_fed!($newtype; $generic; $($component),*; $b, Fed7::T2);
+        from_fed!($newtype; $generic; $($component),*; $c, Fed7::T3);
+        from_fed!($newtype; $generic; $($component),*; $d, Fed7::T4);
+        from_fed!($newtype; $generic; $($component),*; $e, Fed7::T5);
+        from_fed!($newtype; $generic; $($component),*; $f, Fed7::T6);
+        from_fed!($newtype; $generic; $($component),*; $g, Fed7::T7);
 
-        fed_traits!($newtype; $g, Fed7::T7, Fed6, $a => Fed7::T1, $b => Fed7::T2, $c => Fed7::T3, $d => Fed7::T4, $e => Fed7::T5, $f => Fed7::T6                );
-        fed_traits!($newtype; $f, Fed7::T6, Fed6, $a => Fed7::T1, $b => Fed7::T2, $c => Fed7::T3, $d => Fed7::T4, $e => Fed7::T5,                 $g => Fed7::T7);
-        fed_traits!($newtype; $e, Fed7::T5, Fed6, $a => Fed7::T1, $b => Fed7::T2, $c => Fed7::T3, $d => Fed7::T4,                 $f => Fed7::T6, $g => Fed7::T7);
-        fed_traits!($newtype; $d, Fed7::T4, Fed6, $a => Fed7::T1, $b => Fed7::T2, $c => Fed7::T3,                 $e => Fed7::T5, $f => Fed7::T6, $g => Fed7::T7);
-        fed_traits!($newtype; $c, Fed7::T3, Fed6, $a => Fed7::T1, $b => Fed7::T2,                 $d => Fed7::T4, $e => Fed7::T5, $f => Fed7::T6, $g => Fed7::T7);
-        fed_traits!($newtype; $b, Fed7::T2, Fed6, $a => Fed7::T1,                 $c => Fed7::T3, $d => Fed7::T4, $e => Fed7::T5, $f => Fed7::T6, $g => Fed7::T7);
-        fed_traits!($newtype; $a, Fed7::T1, Fed6,                 $b => Fed7::T2, $c => Fed7::T3, $d => Fed7::T4, $e => Fed7::T5, $f => Fed7::T6, $g => Fed7::T7);
+        fed_traits!($newtype; $generic; $($component),*; $g, Fed7::T7, Fed6, $a => Fed7::T1, $b => Fed7::T2, $c => Fed7::T3, $d => Fed7::T4, $e => Fed7::T5, $f => Fed7::T6                );
+        fed_traits!($newtype; $generic; $($component),*; $f, Fed7::T6, Fed6, $a => Fed7::T1, $b => Fed7::T2, $c => Fed7::T3, $d => Fed7::T4, $e => Fed7::T5,                 $g => Fed7::T7);
+        fed_traits!($newtype; $generic; $($component),*; $e, Fed7::T5, Fed6, $a => Fed7::T1, $b => Fed7::T2, $c => Fed7::T3, $d => Fed7::T4,                 $f => Fed7::T6, $g => Fed7::T7);
+        fed_traits!($newtype; $generic; $($component),*; $d, Fed7::T4, Fed6, $a => Fed7::T1, $b => Fed7::T2, $c => Fed7::T3,                 $e => Fed7::T5, $f => Fed7::T6, $g => Fed7::T7);
+        fed_traits!($newtype; $generic; $($component),*; $c, Fed7::T3, Fed6, $a => Fed7::T1, $b => Fed7::T2,                 $d => Fed7::T4, $e => Fed7::T5, $f => Fed7::T6, $g => Fed7::T7);
+        fed_traits!($newtype; $generic; $($component),*; $b, Fed7::T2, Fed6, $a => Fed7::T1,                 $c => Fed7::T3, $d => Fed7::T4, $e => Fed7::T5, $f => Fed7::T6, $g => Fed7::T7);
+        fed_traits!($newtype; $generic; $($component),*; $a, Fed7::T1, Fed6,                 $b => Fed7::T2, $c => Fed7::T3, $d => Fed7::T4, $e => Fed7::T5, $f => Fed7::T6, $g => Fed7::T7);
 
-        fed_promotion!(Fed1<$g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed1::T1);
-        fed_promotion!(Fed1<$f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed1::T1);
-        fed_promotion!(Fed1<$e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed1::T1);
-        fed_promotion!(Fed1<$d> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed1::T1);
-        fed_promotion!(Fed1<$c> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed1::T1);
-        fed_promotion!(Fed1<$b> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed1::T1);
-        fed_promotion!(Fed1<$a> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed7; <$g> => <$a, $b, $c, $d, $e, $f, $g>; Fed1<$g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed7; <$f> => <$a, $b, $c, $d, $e, $f, $g>; Fed1<$f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed7; <$e> => <$a, $b, $c, $d, $e, $f, $g>; Fed1<$e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed7; <$d> => <$a, $b, $c, $d, $e, $f, $g>; Fed1<$d> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed7; <$c> => <$a, $b, $c, $d, $e, $f, $g>; Fed1<$c> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed7; <$b> => <$a, $b, $c, $d, $e, $f, $g>; Fed1<$b> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed7; <$a> => <$a, $b, $c, $d, $e, $f, $g>; Fed1<$a> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed1::T1);
 
-        fed_promotion!(Fed2<$f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$d, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$d, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$d, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$c, $d> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$c, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$c, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$c, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $c> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $d> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $b> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $c> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $d> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$e, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$e, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$d, $e> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$d, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$d, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$d, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$d, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$d, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$c, $d> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$c, $d> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$c, $e> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$c, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$c, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$c, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$c, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$c, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$b, $c> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$b, $c> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$b, $d> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$b, $d> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$b, $e> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$b, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$b, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$b, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$b, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$b, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$a, $b> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$a, $b> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$a, $c> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$a, $c> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$a, $d> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$a, $d> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$a, $e> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$a, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$a, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$a, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed7; <$a, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed2<$a, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed2::T1, Fed2::T2);
 
-        fed_promotion!(Fed3<$e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$d, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$d, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$d, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $d, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $d, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $d, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $c, $d> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $c, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $c, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $c, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $d, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $d, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $d, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $c> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $d> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $c, $d> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $c, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $c, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $c, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $d, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $d, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $d, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
-
-
-        fed_promotion!(Fed4<$d, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$c, $d, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$c, $d, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$c, $d, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$c, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $d, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $d, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $d, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $d, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $d, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $c, $d> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $c, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $d, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $d, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $c, $d, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $c, $d, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $c, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $c, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $c, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $d, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $d, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $d, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed3 => Fed7; <$e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$d, $e, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$d, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$d, $e, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$d, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$d, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$d, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$c, $d, $e> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$c, $d, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$c, $d, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$c, $d, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$c, $d, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$c, $d, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$c, $e, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$c, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$c, $e, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$c, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$c, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$c, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$b, $c, $d> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$b, $c, $d> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$b, $c, $e> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$b, $c, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$b, $c, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$b, $c, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$b, $c, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$b, $c, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$b, $d, $e> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$b, $d, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$b, $d, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$b, $d, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$b, $d, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$b, $d, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$b, $e, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$b, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$b, $e, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$b, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$b, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$b, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$a, $b, $c> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$a, $b, $c> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$a, $b, $d> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$a, $b, $d> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$a, $b, $e> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$a, $b, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$a, $b, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$a, $b, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$a, $b, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$a, $b, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$a, $c, $d> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$a, $c, $d> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$a, $c, $e> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$a, $c, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$a, $c, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$a, $c, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$a, $c, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$a, $c, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$a, $d, $e> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$a, $d, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$a, $d, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$a, $d, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$a, $d, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$a, $d, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$a, $e, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$a, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$a, $e, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$a, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed7; <$a, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed3<$a, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed3::T1, Fed3::T2, Fed3::T3);
 
 
-        fed_promotion!(Fed5<$c, $d, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $c, $d, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $c, $d, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $c, $d, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $c, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $d, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $c, $d, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $c, $d, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $c, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $c, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $d, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $d, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $d, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $c, $d, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $c, $d, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $c, $d, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $c, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $d, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed4 => Fed7; <$d, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$d, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$c, $d, $e, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$c, $d, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$c, $d, $e, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$c, $d, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$c, $d, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$c, $d, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$c, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$c, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$b, $c, $d, $e> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$b, $c, $d, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$b, $c, $d, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$b, $c, $d, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$b, $c, $e, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$b, $c, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$b, $c, $e, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$b, $c, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$b, $c, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$b, $c, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$b, $d, $e, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$b, $d, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$b, $d, $e, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$b, $d, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$b, $d, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$b, $d, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$b, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$b, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$a, $b, $c, $d> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$a, $b, $c, $d> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$a, $b, $c, $e> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$a, $b, $c, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$a, $b, $d, $e> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$a, $b, $d, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$a, $b, $d, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$a, $b, $d, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$a, $b, $e, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$a, $b, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$a, $b, $e, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$a, $b, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$a, $b, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$a, $b, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$a, $c, $d, $e> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$a, $c, $d, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$a, $c, $d, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$a, $c, $d, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$a, $c, $e, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$a, $c, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$a, $c, $e, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$a, $c, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$a, $c, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$a, $c, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$a, $d, $e, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$a, $d, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$a, $d, $e, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$a, $d, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$a, $d, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$a, $d, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed7; <$a, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed4<$a, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
 
 
-        fed_promotion!(Fed6<$b, $c, $d, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $c, $d, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $c, $d, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $c, $d, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $c, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $d, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $c, $d, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed5 => Fed7; <$c, $d, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$c, $d, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$b, $c, $d, $e, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$b, $c, $d, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$b, $c, $d, $e, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$b, $c, $d, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$b, $c, $d, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$b, $c, $d, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$b, $c, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$b, $c, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$b, $d, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$b, $d, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$a, $b, $c, $d, $e> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$a, $b, $c, $d, $e> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$a, $b, $c, $d, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$a, $b, $c, $d, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$a, $b, $c, $e, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$a, $b, $c, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$a, $b, $c, $e, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$a, $b, $c, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$a, $b, $d, $e, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$a, $b, $d, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$a, $b, $d, $e, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$a, $b, $d, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$a, $b, $d, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$a, $b, $d, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$a, $b, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$a, $b, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$a, $c, $d, $e, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$a, $c, $d, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$a, $c, $d, $e, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$a, $c, $d, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$a, $c, $d, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$a, $c, $d, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$a, $c, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$a, $c, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed7; <$a, $d, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed5<$a, $d, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+
+
+        fed_promotion!(Fed6 => Fed7; <$b, $c, $d, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed6<$b, $c, $d, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed7; <$a, $b, $c, $d, $e, $f> => <$a, $b, $c, $d, $e, $f, $g>; Fed6<$a, $b, $c, $d, $e, $f> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed7; <$a, $b, $c, $d, $e, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed6<$a, $b, $c, $d, $e, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed7; <$a, $b, $c, $d, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed6<$a, $b, $c, $d, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed7; <$a, $b, $c, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed6<$a, $b, $c, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed7; <$a, $b, $d, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed6<$a, $b, $d, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed7; <$a, $c, $d, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g>; Fed6<$a, $c, $d, $e, $f, $g> => Fed7<$a, $b, $c, $d, $e, $f, $g>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
 
     };
     ($newtype:ty; $a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, $g:ty) => {
-        fed6!($a, $b, $c, $d, $e, $f,     @without_children);
-        fed6!($a, $b, $c, $d, $e,     $g, @without_children);
-        fed6!($a, $b, $c, $d,     $f, $g, @without_children);
-        fed6!($a, $b, $c,     $e, $f, $g, @without_children);
-        fed6!($a, $b,     $d, $e, $f, $g, @without_children);
-        fed6!($a,     $c, $d, $e, $f, $g, @without_children);
-        fed6!(    $b, $c, $d, $e, $f, $g, @without_children);
+        fed6!($a, $b, $c, $d, $e, $f;     @without_children);
+        fed6!($a, $b, $c, $d, $e,     $g; @without_children);
+        fed6!($a, $b, $c, $d,     $f, $g; @without_children);
+        fed6!($a, $b, $c,     $e, $f, $g; @without_children);
+        fed6!($a, $b,     $d, $e, $f, $g; @without_children);
+        fed6!($a,     $c, $d, $e, $f, $g; @without_children);
+        fed6!(    $b, $c, $d, $e, $f, $g; @without_children);
 
-        fed5!($a, $b, $c, $d, $e,         @without_children);
-        fed5!($a, $b, $c, $d,     $f,     @without_children);
-        fed5!($a, $b, $c,     $e, $f,     @without_children);
-        fed5!($a, $b,     $d, $e, $f,     @without_children);
-        fed5!($a,     $c, $d, $e, $f,     @without_children);
-        fed5!(    $b, $c, $d, $e, $f,     @without_children);
+        fed5!($a, $b, $c, $d, $e;         @without_children);
+        fed5!($a, $b, $c, $d,     $f;     @without_children);
+        fed5!($a, $b, $c,     $e, $f;     @without_children);
+        fed5!($a, $b,     $d, $e, $f;     @without_children);
+        fed5!($a,     $c, $d, $e, $f;     @without_children);
+        fed5!(    $b, $c, $d, $e, $f;     @without_children);
         //
-        fed5!($a, $b, $c, $d,         $g, @without_children);
-        fed5!($a, $b, $c,     $e,     $g, @without_children);
-        fed5!($a, $b, $c,         $f, $g, @without_children);
-        fed5!($a, $b,     $d, $e,     $g, @without_children);
-        fed5!($a, $b,     $d,     $f, $g, @without_children);
-        fed5!($a, $b,         $e, $f, $g, @without_children);
-        fed5!($a,     $c, $d, $e,     $g, @without_children);
-        fed5!($a,     $c, $d,     $f, $g, @without_children);
-        fed5!($a,     $c,     $e, $f, $g, @without_children);
-        fed5!($a,         $d, $e, $f, $g, @without_children);
-        fed5!(    $b, $c, $d, $e,     $g, @without_children);
-        fed5!(    $b, $c, $d,     $f, $g, @without_children);
-        fed5!(    $b, $c,     $e, $f, $g, @without_children);
-        fed5!(    $b,     $d, $e, $f, $g, @without_children);
-        fed5!(        $c, $d, $e, $f, $g, @without_children);
+        fed5!($a, $b, $c, $d,         $g; @without_children);
+        fed5!($a, $b, $c,     $e,     $g; @without_children);
+        fed5!($a, $b, $c,         $f, $g; @without_children);
+        fed5!($a, $b,     $d, $e,     $g; @without_children);
+        fed5!($a, $b,     $d,     $f, $g; @without_children);
+        fed5!($a, $b,         $e, $f, $g; @without_children);
+        fed5!($a,     $c, $d, $e,     $g; @without_children);
+        fed5!($a,     $c, $d,     $f, $g; @without_children);
+        fed5!($a,     $c,     $e, $f, $g; @without_children);
+        fed5!($a,         $d, $e, $f, $g; @without_children);
+        fed5!(    $b, $c, $d, $e,     $g; @without_children);
+        fed5!(    $b, $c, $d,     $f, $g; @without_children);
+        fed5!(    $b, $c,     $e, $f, $g; @without_children);
+        fed5!(    $b,     $d, $e, $f, $g; @without_children);
+        fed5!(        $c, $d, $e, $f, $g; @without_children);
 
-        fed4!($a, $b, $c, $d,             @without_children);
-        fed4!($a, $b, $c,     $e,         @without_children);
-        fed4!($a, $b, $c,         $f,     @without_children);
-        fed4!($a, $b,     $d, $e,         @without_children);
-        fed4!($a, $b,     $d,     $f,     @without_children);
-        fed4!($a, $b,         $e, $f,     @without_children);
-        fed4!($a,     $c, $d, $e,         @without_children);
-        fed4!($a,     $c, $d,     $f,     @without_children);
-        fed4!($a,     $c,     $e, $f,     @without_children);
-        fed4!($a,         $d, $e, $f,     @without_children);
-        fed4!(    $b, $c, $d, $e,         @without_children);
-        fed4!(    $b, $c, $d,     $f,     @without_children);
-        fed4!(    $b, $c,     $e, $f,     @without_children);
-        fed4!(    $b,     $d, $e, $f,     @without_children);
-        fed4!(        $c, $d, $e, $f,     @without_children);
+        fed4!($a, $b, $c, $d;             @without_children);
+        fed4!($a, $b, $c,     $e;         @without_children);
+        fed4!($a, $b, $c,         $f;     @without_children);
+        fed4!($a, $b,     $d, $e;         @without_children);
+        fed4!($a, $b,     $d,     $f;     @without_children);
+        fed4!($a, $b,         $e, $f;     @without_children);
+        fed4!($a,     $c, $d, $e;         @without_children);
+        fed4!($a,     $c, $d,     $f;     @without_children);
+        fed4!($a,     $c,     $e, $f;     @without_children);
+        fed4!($a,         $d, $e, $f;     @without_children);
+        fed4!(    $b, $c, $d, $e;         @without_children);
+        fed4!(    $b, $c, $d,     $f;     @without_children);
+        fed4!(    $b, $c,     $e, $f;     @without_children);
+        fed4!(    $b,     $d, $e, $f;     @without_children);
+        fed4!(        $c, $d, $e, $f;     @without_children);
         //
-        fed4!($a, $b, $c,             $g, @without_children);
-        fed4!($a, $b,     $d,         $g, @without_children);
-        fed4!($a, $b,         $e,     $g, @without_children);
-        fed4!($a,     $c, $d,         $g, @without_children);
-        fed4!($a,     $c,     $e,     $g, @without_children);
-        fed4!($a,         $d, $e,     $g, @without_children);
-        fed4!(    $b, $c, $d,         $g, @without_children);
-        fed4!(    $b, $c,     $e,     $g, @without_children);
-        fed4!(    $b,     $d, $e,     $g, @without_children);
-        fed4!(        $c, $d, $e,     $g, @without_children);
-        fed4!($a, $b,             $f, $g, @without_children);
-        fed4!($a,     $c,         $f, $g, @without_children);
-        fed4!($a,         $d,     $f, $g, @without_children);
-        fed4!($a,             $e, $f, $g, @without_children);
-        fed4!(    $b, $c,         $f, $g, @without_children);
-        fed4!(    $b,     $d,     $f, $g, @without_children);
-        fed4!(    $b,         $e, $f, $g, @without_children);
-        fed4!(        $c, $d,     $f, $g, @without_children);
-        fed4!(        $c,     $e, $f, $g, @without_children);
-        fed4!(            $d, $e, $f, $g, @without_children);
+        fed4!($a, $b, $c,             $g; @without_children);
+        fed4!($a, $b,     $d,         $g; @without_children);
+        fed4!($a, $b,         $e,     $g; @without_children);
+        fed4!($a,     $c, $d,         $g; @without_children);
+        fed4!($a,     $c,     $e,     $g; @without_children);
+        fed4!($a,         $d, $e,     $g; @without_children);
+        fed4!(    $b, $c, $d,         $g; @without_children);
+        fed4!(    $b, $c,     $e,     $g; @without_children);
+        fed4!(    $b,     $d, $e,     $g; @without_children);
+        fed4!(        $c, $d, $e,     $g; @without_children);
+        fed4!($a, $b,             $f, $g; @without_children);
+        fed4!($a,     $c,         $f, $g; @without_children);
+        fed4!($a,         $d,     $f, $g; @without_children);
+        fed4!($a,             $e, $f, $g; @without_children);
+        fed4!(    $b, $c,         $f, $g; @without_children);
+        fed4!(    $b,     $d,     $f, $g; @without_children);
+        fed4!(    $b,         $e, $f, $g; @without_children);
+        fed4!(        $c, $d,     $f, $g; @without_children);
+        fed4!(        $c,     $e, $f, $g; @without_children);
+        fed4!(            $d, $e, $f, $g; @without_children);
 
-        fed3!($a, $b, $c,                 @without_children);
-        fed3!($a, $b,     $d,             @without_children);
-        fed3!($a, $b,         $e,         @without_children);
-        fed3!($a,     $c, $d,             @without_children);
-        fed3!($a,     $c,     $e,         @without_children);
-        fed3!($a,         $d, $e,         @without_children);
-        fed3!(    $b, $c, $d,             @without_children);
-        fed3!(    $b, $c,     $e,         @without_children);
-        fed3!(    $b,     $d, $e,         @without_children);
-        fed3!(        $c, $d, $e,         @without_children);
-        fed3!($a, $b,             $f,     @without_children);
-        fed3!($a,     $c,         $f,     @without_children);
-        fed3!($a,         $d,     $f,     @without_children);
-        fed3!($a,             $e, $f,     @without_children);
-        fed3!(    $b, $c,         $f,     @without_children);
-        fed3!(    $b,     $d,     $f,     @without_children);
-        fed3!(    $b,         $e, $f,     @without_children);
-        fed3!(        $c, $d,     $f,     @without_children);
-        fed3!(        $c,     $e, $f,     @without_children);
-        fed3!(            $d, $e, $f,     @without_children);
+        fed3!($a, $b, $c;                 @without_children);
+        fed3!($a, $b,     $d;             @without_children);
+        fed3!($a, $b,         $e;         @without_children);
+        fed3!($a,     $c, $d;             @without_children);
+        fed3!($a,     $c,     $e;         @without_children);
+        fed3!($a,         $d, $e;         @without_children);
+        fed3!(    $b, $c, $d;             @without_children);
+        fed3!(    $b, $c,     $e;         @without_children);
+        fed3!(    $b,     $d, $e;         @without_children);
+        fed3!(        $c, $d, $e;         @without_children);
+        fed3!($a, $b,             $f;     @without_children);
+        fed3!($a,     $c,         $f;     @without_children);
+        fed3!($a,         $d,     $f;     @without_children);
+        fed3!($a,             $e, $f;     @without_children);
+        fed3!(    $b, $c,         $f;     @without_children);
+        fed3!(    $b,     $d,     $f;     @without_children);
+        fed3!(    $b,         $e, $f;     @without_children);
+        fed3!(        $c, $d,     $f;     @without_children);
+        fed3!(        $c,     $e, $f;     @without_children);
+        fed3!(            $d, $e, $f;     @without_children);
         //
-        fed3!($a, $b,                 $g, @without_children);
-        fed3!($a,     $c,             $g, @without_children);
-        fed3!($a,         $d,         $g, @without_children);
-        fed3!($a,             $e,     $g, @without_children);
-        fed3!($a,                 $f, $g, @without_children);
-        fed3!(    $b, $c,             $g, @without_children);
-        fed3!(    $b,     $d,         $g, @without_children);
-        fed3!(    $b,         $e,     $g, @without_children);
-        fed3!(    $b,             $f, $g, @without_children);
-        fed3!(        $c, $d,         $g, @without_children);
-        fed3!(        $c,     $e,     $g, @without_children);
-        fed3!(        $c,         $f, $g, @without_children);
-        fed3!(            $d, $e,     $g, @without_children);
-        fed3!(            $d,     $f, $g, @without_children);
-        fed3!(                $e, $f, $g, @without_children);
+        fed3!($a, $b,                 $g; @without_children);
+        fed3!($a,     $c,             $g; @without_children);
+        fed3!($a,         $d,         $g; @without_children);
+        fed3!($a,             $e,     $g; @without_children);
+        fed3!($a,                 $f, $g; @without_children);
+        fed3!(    $b, $c,             $g; @without_children);
+        fed3!(    $b,     $d,         $g; @without_children);
+        fed3!(    $b,         $e,     $g; @without_children);
+        fed3!(    $b,             $f, $g; @without_children);
+        fed3!(        $c, $d,         $g; @without_children);
+        fed3!(        $c,     $e,     $g; @without_children);
+        fed3!(        $c,         $f, $g; @without_children);
+        fed3!(            $d, $e,     $g; @without_children);
+        fed3!(            $d,     $f, $g; @without_children);
+        fed3!(                $e, $f, $g; @without_children);
 
-        fed2!($a, $b,                     @without_children);
-        fed2!($a,     $c,                 @without_children);
-        fed2!($a,         $d,             @without_children);
-        fed2!($a,             $e,         @without_children);
-        fed2!($a,                 $f,     @without_children);
-        fed2!($a,                     $g, @without_children);
-        fed2!(    $b, $c,                 @without_children);
-        fed2!(    $b,     $d,             @without_children);
-        fed2!(    $b,         $e,         @without_children);
-        fed2!(    $b,             $f,     @without_children);
-        fed2!(    $b,                 $g, @without_children);
-        fed2!(        $c, $d,             @without_children);
-        fed2!(        $c,     $e,         @without_children);
-        fed2!(        $c,         $f,     @without_children);
-        fed2!(        $c,             $g, @without_children);
-        fed2!(            $d, $e,         @without_children);
-        fed2!(            $d,     $f,     @without_children);
-        fed2!(            $d,         $g, @without_children);
-        fed2!(                $e, $f,     @without_children);
-        fed2!(                $e,     $g, @without_children);
-        fed2!(                    $f, $g, @without_children);
+        fed2!($a, $b;                     @without_children);
+        fed2!($a,     $c;                 @without_children);
+        fed2!($a,         $d;             @without_children);
+        fed2!($a,             $e;         @without_children);
+        fed2!($a,                 $f;     @without_children);
+        fed2!($a,                     $g; @without_children);
+        fed2!(    $b, $c;                 @without_children);
+        fed2!(    $b,     $d;             @without_children);
+        fed2!(    $b,         $e;         @without_children);
+        fed2!(    $b,             $f;     @without_children);
+        fed2!(    $b,                 $g; @without_children);
+        fed2!(        $c, $d;             @without_children);
+        fed2!(        $c,     $e;         @without_children);
+        fed2!(        $c,         $f;     @without_children);
+        fed2!(        $c,             $g; @without_children);
+        fed2!(            $d, $e;         @without_children);
+        fed2!(            $d,     $f;     @without_children);
+        fed2!(            $d,         $g; @without_children);
+        fed2!(                $e, $f;     @without_children);
+        fed2!(                $e,     $g; @without_children);
+        fed2!(                    $f, $g; @without_children);
 
-        fed7!($newtype; $a, $b, $c, $d, $e, $f, $g, @without_children);
+        fed7!($newtype; $a, $b, $c, $d, $e, $f, $g; @without_children);
     };
 }
 
@@ -1045,506 +1177,509 @@ macro_rules! fed8 {
     ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, $g:ty, $h:ty) => {
         fed8!(Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; $a, $b, $c, $d, $e, $f, $g, $h);
     };
-    ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, $g:ty, $h:ty, @without_children) => {
-        fed8!(Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; $a, $b, $c, $d, $e, $f, $g, $h, @without_children);
+    ($a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, $g:ty, $h:ty; @without_children) => {
+        fed8!(Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; $a, $b, $c, $d, $e, $f, $g, $h; @without_children);
     };
-    ($newtype:ty; $a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, $g:ty, $h:ty, @without_children) => {
-        from_fed!($newtype; $a, Fed8::T1);
-        from_fed!($newtype; $b, Fed8::T2);
-        from_fed!($newtype; $c, Fed8::T3);
-        from_fed!($newtype; $d, Fed8::T4);
-        from_fed!($newtype; $e, Fed8::T5);
-        from_fed!($newtype; $f, Fed8::T6);
-        from_fed!($newtype; $g, Fed8::T7);
-        from_fed!($newtype; $h, Fed8::T8);
+    ($newtype:ty; $a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, $g:ty, $h:ty; @without_children) => {
+        fed8!(Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; generic: Fed8; $a, $b, $c, $d, $e, $f, $g, $h; $a, $b, $c, $d, $e, $f, $g, $h; @without_children);
+    };
+    ($newtype:ty; generic: $generic:ident; $($component:ty),*; $a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, $g:ty, $h:ty; @without_children) => {
+        from_fed!($newtype; $generic; $($component),*; $a, Fed8::T1);
+        from_fed!($newtype; $generic; $($component),*; $b, Fed8::T2);
+        from_fed!($newtype; $generic; $($component),*; $c, Fed8::T3);
+        from_fed!($newtype; $generic; $($component),*; $d, Fed8::T4);
+        from_fed!($newtype; $generic; $($component),*; $e, Fed8::T5);
+        from_fed!($newtype; $generic; $($component),*; $f, Fed8::T6);
+        from_fed!($newtype; $generic; $($component),*; $g, Fed8::T7);
+        from_fed!($newtype; $generic; $($component),*; $h, Fed8::T8);
 
-        fed_traits!($newtype; $h, Fed8::T8, Fed7, $a => Fed8::T1, $b => Fed8::T2, $c => Fed8::T3, $d => Fed8::T4, $e => Fed8::T5, $f => Fed8::T6, $g => Fed8::T7                );
-        fed_traits!($newtype; $g, Fed8::T7, Fed7, $a => Fed8::T1, $b => Fed8::T2, $c => Fed8::T3, $d => Fed8::T4, $e => Fed8::T5, $f => Fed8::T6,                 $h => Fed8::T8);
-        fed_traits!($newtype; $f, Fed8::T6, Fed7, $a => Fed8::T1, $b => Fed8::T2, $c => Fed8::T3, $d => Fed8::T4, $e => Fed8::T5,                 $g => Fed8::T7, $h => Fed8::T8);
-        fed_traits!($newtype; $e, Fed8::T5, Fed7, $a => Fed8::T1, $b => Fed8::T2, $c => Fed8::T3, $d => Fed8::T4,                 $f => Fed8::T6, $g => Fed8::T7, $h => Fed8::T8);
-        fed_traits!($newtype; $d, Fed8::T4, Fed7, $a => Fed8::T1, $b => Fed8::T2, $c => Fed8::T3,                 $e => Fed8::T5, $f => Fed8::T6, $g => Fed8::T7, $h => Fed8::T8);
-        fed_traits!($newtype; $c, Fed8::T3, Fed7, $a => Fed8::T1, $b => Fed8::T2,                 $d => Fed8::T4, $e => Fed8::T5, $f => Fed8::T6, $g => Fed8::T7, $h => Fed8::T8);
-        fed_traits!($newtype; $b, Fed8::T2, Fed7, $a => Fed8::T1,                 $c => Fed8::T3, $d => Fed8::T4, $e => Fed8::T5, $f => Fed8::T6, $g => Fed8::T7, $h => Fed8::T8);
-        fed_traits!($newtype; $a, Fed8::T1, Fed7,                 $b => Fed8::T2, $c => Fed8::T3, $d => Fed8::T4, $e => Fed8::T5, $f => Fed8::T6, $g => Fed8::T7, $h => Fed8::T8);
+        fed_traits!($newtype; $generic; $($component),*; $h, Fed8::T8, Fed7, $a => Fed8::T1, $b => Fed8::T2, $c => Fed8::T3, $d => Fed8::T4, $e => Fed8::T5, $f => Fed8::T6, $g => Fed8::T7                );
+        fed_traits!($newtype; $generic; $($component),*; $g, Fed8::T7, Fed7, $a => Fed8::T1, $b => Fed8::T2, $c => Fed8::T3, $d => Fed8::T4, $e => Fed8::T5, $f => Fed8::T6,                 $h => Fed8::T8);
+        fed_traits!($newtype; $generic; $($component),*; $f, Fed8::T6, Fed7, $a => Fed8::T1, $b => Fed8::T2, $c => Fed8::T3, $d => Fed8::T4, $e => Fed8::T5,                 $g => Fed8::T7, $h => Fed8::T8);
+        fed_traits!($newtype; $generic; $($component),*; $e, Fed8::T5, Fed7, $a => Fed8::T1, $b => Fed8::T2, $c => Fed8::T3, $d => Fed8::T4,                 $f => Fed8::T6, $g => Fed8::T7, $h => Fed8::T8);
+        fed_traits!($newtype; $generic; $($component),*; $d, Fed8::T4, Fed7, $a => Fed8::T1, $b => Fed8::T2, $c => Fed8::T3,                 $e => Fed8::T5, $f => Fed8::T6, $g => Fed8::T7, $h => Fed8::T8);
+        fed_traits!($newtype; $generic; $($component),*; $c, Fed8::T3, Fed7, $a => Fed8::T1, $b => Fed8::T2,                 $d => Fed8::T4, $e => Fed8::T5, $f => Fed8::T6, $g => Fed8::T7, $h => Fed8::T8);
+        fed_traits!($newtype; $generic; $($component),*; $b, Fed8::T2, Fed7, $a => Fed8::T1,                 $c => Fed8::T3, $d => Fed8::T4, $e => Fed8::T5, $f => Fed8::T6, $g => Fed8::T7, $h => Fed8::T8);
+        fed_traits!($newtype; $generic; $($component),*; $a, Fed8::T1, Fed7,                 $b => Fed8::T2, $c => Fed8::T3, $d => Fed8::T4, $e => Fed8::T5, $f => Fed8::T6, $g => Fed8::T7, $h => Fed8::T8);
 
-        fed_promotion!(Fed1<$h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed1::T1);
-        fed_promotion!(Fed1<$g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed1::T1);
-        fed_promotion!(Fed1<$f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed1::T1);
-        fed_promotion!(Fed1<$e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed1::T1);
-        fed_promotion!(Fed1<$d> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed1::T1);
-        fed_promotion!(Fed1<$c> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed1::T1);
-        fed_promotion!(Fed1<$b> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed1::T1);
-        fed_promotion!(Fed1<$a> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed8; <$h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed1<$h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed8; <$g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed1<$g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed8; <$f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed1<$f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed8; <$e> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed1<$e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed8; <$d> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed1<$d> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed8; <$c> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed1<$c> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed8; <$b> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed1<$b> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed1::T1);
+        fed_promotion!(Fed1 => Fed8; <$a> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed1<$a> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed1::T1);
 
 
-        fed_promotion!(Fed2<$g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$d, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$d, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$d, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$d, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$c, $d> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$c, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$c, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$c, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$c, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $c> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $d> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$b, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $b> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
-        fed_promotion!(Fed2<$a, $c> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$e, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$e, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$e, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$d, $e> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$d, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$d, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$d, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$d, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$d, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$d, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$d, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$c, $d> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$c, $d> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$c, $e> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$c, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$c, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$c, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$c, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$c, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$c, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$c, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$b, $c> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$b, $c> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$b, $d> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$b, $d> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$b, $e> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$b, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$b, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$b, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$b, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$b, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$b, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$b, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$a, $b> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$a, $b> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
+        fed_promotion!(Fed2 => Fed8; <$a, $c> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed2<$a, $c> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed2::T1, Fed2::T2);
 
-        fed_promotion!(Fed3<$f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$d, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$d, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$d, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$d, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$d, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$d, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $d, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $d, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $d, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $d, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$c, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $c, $d> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $c, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $c, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $c, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $c, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $d, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $d, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $d, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $d, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$b, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $c> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $d> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $b, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $c, $d> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
-        fed_promotion!(Fed3<$a, $c, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$e, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$e, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$d, $e, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$d, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$d, $e, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$d, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$d, $e, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$d, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$d, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$d, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$d, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$d, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$d, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$d, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$c, $d, $e> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$c, $d, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$c, $d, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$c, $d, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$c, $d, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$c, $d, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$c, $d, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$c, $d, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$c, $e, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$c, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$c, $e, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$c, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$c, $e, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$c, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$c, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$c, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$c, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$c, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$c, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$c, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$b, $c, $d> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$b, $c, $d> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$b, $c, $e> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$b, $c, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$b, $c, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$b, $c, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$b, $c, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$b, $c, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$b, $c, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$b, $c, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$b, $d, $e> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$b, $d, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$b, $d, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$b, $d, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$b, $d, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$b, $d, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$b, $d, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$b, $d, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$b, $e, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$b, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$b, $e, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$b, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$b, $e, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$b, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$b, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$b, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$b, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$b, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$b, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$b, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$a, $b, $c> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$a, $b, $c> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$a, $b, $d> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$a, $b, $d> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$a, $b, $e> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$a, $b, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$a, $b, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$a, $b, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$a, $b, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$a, $b, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$a, $b, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$a, $b, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$a, $c, $d> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$a, $c, $d> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
+        fed_promotion!(Fed3 => Fed8; <$a, $c, $e> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed3<$a, $c, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed3::T1, Fed3::T2, Fed3::T3);
 
-        fed_promotion!(Fed4<$e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$d, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$d, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$d, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$d, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$c, $d, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$c, $d, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$c, $d, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$c, $d, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$c, $d, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$c, $d, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$c, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$c, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$c, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$c, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $d, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $d, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $d, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $d, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $c, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $d, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $d, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $d, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $d, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $d, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $d, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$b, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $c, $d> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $c, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $c, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $c, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $c, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $d, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $d, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $d, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $d, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $b, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $c, $d, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $c, $d, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $c, $d, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $c, $d, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $c, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
-        fed_promotion!(Fed4<$a, $c, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$e, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$d, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$d, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$d, $e, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$d, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$d, $e, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$d, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$d, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$d, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$c, $d, $e, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$c, $d, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$c, $d, $e, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$c, $d, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$c, $d, $e, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$c, $d, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$c, $d, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$c, $d, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$c, $d, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$c, $d, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$c, $d, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$c, $d, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$c, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$c, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$c, $e, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$c, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$c, $e, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$c, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$c, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$c, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $c, $d, $e> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $c, $d, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $c, $d, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $c, $d, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $c, $d, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $c, $d, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $c, $d, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $c, $d, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $c, $e, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $c, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $c, $e, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $c, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $c, $e, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $c, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $c, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $c, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $c, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $c, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $c, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $c, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $d, $e, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $d, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $d, $e, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $d, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $d, $e, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $d, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $d, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $d, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $d, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $d, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $d, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $d, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $e, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $e, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$b, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$b, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $b, $c, $d> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $b, $c, $d> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $b, $c, $e> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $b, $c, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $b, $c, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $b, $c, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $b, $c, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $b, $c, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $b, $c, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $b, $c, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $b, $d, $e> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $b, $d, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $b, $d, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $b, $d, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $b, $d, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $b, $d, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $b, $d, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $b, $d, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $b, $e, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $b, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $b, $e, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $b, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $b, $e, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $b, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $b, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $b, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $b, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $b, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $b, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $b, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $c, $d, $e> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $c, $d, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $c, $d, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $c, $d, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $c, $d, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $c, $d, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $c, $d, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $c, $d, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $c, $e, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $c, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
+        fed_promotion!(Fed4 => Fed8; <$a, $c, $e, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed4<$a, $c, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed4::T1, Fed4::T2, Fed4::T3, Fed4::T4);
 
-        fed_promotion!(Fed5<$d, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$c, $d, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$c, $d, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$c, $d, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$c, $d, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$c, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $c, $d, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $c, $d, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $c, $d, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $c, $d, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $c, $d, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $c, $d, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $c, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $c, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $c, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $c, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $d, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $d, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $d, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $d, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$b, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $c, $d, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $c, $d, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $c, $d, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $c, $d, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $c, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $c, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $c, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $c, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $c, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $c, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $d, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $d, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $d, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $d, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $d, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $d, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $b, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $c, $d, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $c, $d, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $c, $d, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $c, $d, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $c, $d, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $c, $d, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $c, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $c, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
-        fed_promotion!(Fed5<$a, $c, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$d, $e, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$d, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$c, $d, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$c, $d, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$c, $d, $e, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$c, $d, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$c, $d, $e, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$c, $d, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$c, $d, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$c, $d, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$c, $e, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$c, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$b, $c, $d, $e, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$b, $c, $d, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$b, $c, $d, $e, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$b, $c, $d, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$b, $c, $d, $e, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$b, $c, $d, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$b, $c, $d, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$b, $c, $d, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$b, $c, $d, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$b, $c, $d, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$b, $c, $d, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$b, $c, $d, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$b, $c, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$b, $c, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$b, $c, $e, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$b, $c, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$b, $c, $e, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$b, $c, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$b, $c, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$b, $c, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$b, $d, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$b, $d, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$b, $d, $e, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$b, $d, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$b, $d, $e, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$b, $d, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$b, $d, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$b, $d, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$b, $e, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$b, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $c, $d, $e> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $c, $d, $e> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $c, $d, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $c, $d, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $c, $d, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $c, $d, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $c, $d, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $c, $d, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $c, $e, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $c, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $c, $e, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $c, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $c, $e, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $c, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $c, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $c, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $c, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $c, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $c, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $c, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $d, $e, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $d, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $d, $e, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $d, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $d, $e, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $d, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $d, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $d, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $d, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $d, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $d, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $d, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $e, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $e, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $b, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $b, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $c, $d, $e, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $c, $d, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $c, $d, $e, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $c, $d, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $c, $d, $e, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $c, $d, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $c, $d, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $c, $d, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $c, $d, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $c, $d, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $c, $d, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $c, $d, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $c, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $c, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $c, $e, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $c, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
+        fed_promotion!(Fed5 => Fed8; <$a, $c, $e, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed5<$a, $c, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed5::T1, Fed5::T2, Fed5::T3, Fed5::T4, Fed5::T5);
 
-        fed_promotion!(Fed6<$c, $d, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$b, $c, $d, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$b, $c, $d, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$b, $c, $d, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$b, $c, $d, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$b, $c, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$b, $d, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $c, $d, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $c, $d, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $c, $d, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $c, $d, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $c, $d, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $c, $d, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $c, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $c, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $c, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $c, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $d, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $d, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $d, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $d, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $b, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $c, $d, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $c, $d, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $c, $d, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $c, $d, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
-        fed_promotion!(Fed6<$a, $c, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$c, $d, $e, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$c, $d, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$b, $c, $d, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$b, $c, $d, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$b, $c, $d, $e, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$b, $c, $d, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$b, $c, $d, $e, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$b, $c, $d, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$b, $c, $d, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$b, $c, $d, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$b, $c, $e, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$b, $c, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$b, $d, $e, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$b, $d, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $b, $c, $d, $e, $f> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $b, $c, $d, $e, $f> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $b, $c, $d, $e, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $b, $c, $d, $e, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $b, $c, $d, $e, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $b, $c, $d, $e, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $b, $c, $d, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $b, $c, $d, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $b, $c, $d, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $b, $c, $d, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $b, $c, $d, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $b, $c, $d, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $b, $c, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $b, $c, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $b, $c, $e, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $b, $c, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $b, $c, $e, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $b, $c, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $b, $c, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $b, $c, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $b, $d, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $b, $d, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $b, $d, $e, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $b, $d, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $b, $d, $e, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $b, $d, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $b, $d, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $b, $d, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $b, $e, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $b, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $c, $d, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $c, $d, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $c, $d, $e, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $c, $d, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $c, $d, $e, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $c, $d, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $c, $d, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $c, $d, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
+        fed_promotion!(Fed6 => Fed8; <$a, $c, $e, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed6<$a, $c, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed6::T1, Fed6::T2, Fed6::T3, Fed6::T4, Fed6::T5, Fed6::T6);
 
-        fed_promotion!(Fed7<$b, $c, $d, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed7::T1, Fed7::T2, Fed7::T3, Fed7::T4, Fed7::T5, Fed7::T6, Fed7::T7);
-        fed_promotion!(Fed7<$a, $b, $c, $d, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed7::T1, Fed7::T2, Fed7::T3, Fed7::T4, Fed7::T5, Fed7::T6, Fed7::T7);
-        fed_promotion!(Fed7<$a, $b, $c, $d, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed7::T1, Fed7::T2, Fed7::T3, Fed7::T4, Fed7::T5, Fed7::T6, Fed7::T7);
-        fed_promotion!(Fed7<$a, $b, $c, $d, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed7::T1, Fed7::T2, Fed7::T3, Fed7::T4, Fed7::T5, Fed7::T6, Fed7::T7);
-        fed_promotion!(Fed7<$a, $b, $c, $d, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed7::T1, Fed7::T2, Fed7::T3, Fed7::T4, Fed7::T5, Fed7::T6, Fed7::T7);
-        fed_promotion!(Fed7<$a, $b, $c, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed7::T1, Fed7::T2, Fed7::T3, Fed7::T4, Fed7::T5, Fed7::T6, Fed7::T7);
-        fed_promotion!(Fed7<$a, $b, $d, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed7::T1, Fed7::T2, Fed7::T3, Fed7::T4, Fed7::T5, Fed7::T6, Fed7::T7);
-        fed_promotion!(Fed7<$a, $c, $d, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed7::T1, Fed7::T2, Fed7::T3, Fed7::T4, Fed7::T5, Fed7::T6, Fed7::T7);
+        fed_promotion!(Fed7 => Fed8; <$b, $c, $d, $e, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed7<$b, $c, $d, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed7::T1, Fed7::T2, Fed7::T3, Fed7::T4, Fed7::T5, Fed7::T6, Fed7::T7);
+        fed_promotion!(Fed7 => Fed8; <$a, $b, $c, $d, $e, $f, $g> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed7<$a, $b, $c, $d, $e, $f, $g> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed7::T1, Fed7::T2, Fed7::T3, Fed7::T4, Fed7::T5, Fed7::T6, Fed7::T7);
+        fed_promotion!(Fed7 => Fed8; <$a, $b, $c, $d, $e, $f, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed7<$a, $b, $c, $d, $e, $f, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed7::T1, Fed7::T2, Fed7::T3, Fed7::T4, Fed7::T5, Fed7::T6, Fed7::T7);
+        fed_promotion!(Fed7 => Fed8; <$a, $b, $c, $d, $e, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed7<$a, $b, $c, $d, $e, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed7::T1, Fed7::T2, Fed7::T3, Fed7::T4, Fed7::T5, Fed7::T6, Fed7::T7);
+        fed_promotion!(Fed7 => Fed8; <$a, $b, $c, $d, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed7<$a, $b, $c, $d, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed7::T1, Fed7::T2, Fed7::T3, Fed7::T4, Fed7::T5, Fed7::T6, Fed7::T7);
+        fed_promotion!(Fed7 => Fed8; <$a, $b, $c, $e, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed7<$a, $b, $c, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed7::T1, Fed7::T2, Fed7::T3, Fed7::T4, Fed7::T5, Fed7::T6, Fed7::T7);
+        fed_promotion!(Fed7 => Fed8; <$a, $b, $d, $e, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed7<$a, $b, $d, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed7::T1, Fed7::T2, Fed7::T3, Fed7::T4, Fed7::T5, Fed7::T6, Fed7::T7);
+        fed_promotion!(Fed7 => Fed8; <$a, $c, $d, $e, $f, $g, $h> => <$a, $b, $c, $d, $e, $f, $g, $h>; Fed7<$a, $c, $d, $e, $f, $g, $h> => Fed8<$a, $b, $c, $d, $e, $f, $g, $h>; Fed7::T1, Fed7::T2, Fed7::T3, Fed7::T4, Fed7::T5, Fed7::T6, Fed7::T7);
 
     };
     ($newtype:ty; $a:ty, $b:ty, $c:ty, $d:ty, $e:ty, $f:ty, $g:ty, $h:ty) => {
-        fed7!($a, $b, $c, $d, $e, $f, $g,     @without_children);
-        fed7!($a, $b, $c, $d, $e, $f,     $h, @without_children);
-        fed7!($a, $b, $c, $d, $e,     $g, $h, @without_children);
-        fed7!($a, $b, $c, $d,     $f, $g, $h, @without_children);
-        fed7!($a, $b, $c,     $e, $f, $g, $h, @without_children);
-        fed7!($a, $b,     $d, $e, $f, $g, $h, @without_children);
-        fed7!($a,     $c, $d, $e, $f, $g, $h, @without_children);
-        fed7!(    $b, $c, $d, $e, $f, $g, $h, @without_children);
+        fed7!($a, $b, $c, $d, $e, $f, $g;     @without_children);
+        fed7!($a, $b, $c, $d, $e, $f,     $h; @without_children);
+        fed7!($a, $b, $c, $d, $e,     $g, $h; @without_children);
+        fed7!($a, $b, $c, $d,     $f, $g, $h; @without_children);
+        fed7!($a, $b, $c,     $e, $f, $g, $h; @without_children);
+        fed7!($a, $b,     $d, $e, $f, $g, $h; @without_children);
+        fed7!($a,     $c, $d, $e, $f, $g, $h; @without_children);
+        fed7!(    $b, $c, $d, $e, $f, $g, $h; @without_children);
 
-        fed6!($a, $b, $c, $d, $e, $f,         @without_children);
-        fed6!($a, $b, $c, $d, $e,     $g,     @without_children);
-        fed6!($a, $b, $c, $d,     $f, $g,     @without_children);
-        fed6!($a, $b, $c,     $e, $f, $g,     @without_children);
-        fed6!($a, $b,     $d, $e, $f, $g,     @without_children);
-        fed6!($a,     $c, $d, $e, $f, $g,     @without_children);
-        fed6!(    $b, $c, $d, $e, $f, $g,     @without_children);
-        fed6!($a, $b, $c, $d, $e,         $h, @without_children);
-        fed6!($a, $b, $c, $d,     $f,     $h, @without_children);
-        fed6!($a, $b, $c,     $e, $f,     $h, @without_children);
-        fed6!($a, $b,     $d, $e, $f,     $h, @without_children);
-        fed6!($a,     $c, $d, $e, $f,     $h, @without_children);
-        fed6!(    $b, $c, $d, $e, $f,     $h, @without_children);
-        fed6!($a, $b, $c, $d,         $g, $h, @without_children);
-        fed6!($a, $b, $c,     $e,     $g, $h, @without_children);
-        fed6!($a, $b, $c,         $f, $g, $h, @without_children);
-        fed6!($a, $b,     $d, $e,     $g, $h, @without_children);
-        fed6!($a, $b,     $d,     $f, $g, $h, @without_children);
-        fed6!($a, $b,         $e, $f, $g, $h, @without_children);
-        fed6!($a,     $c, $d, $e,     $g, $h, @without_children);
-        fed6!($a,     $c, $d,     $f, $g, $h, @without_children);
-        fed6!($a,     $c,     $e, $f, $g, $h, @without_children);
-        fed6!($a,         $d, $e, $f, $g, $h, @without_children);
-        fed6!(    $b, $c, $d, $e,     $g, $h, @without_children);
-        fed6!(    $b, $c, $d,     $f, $g, $h, @without_children);
-        fed6!(    $b, $c,     $e, $f, $g, $h, @without_children);
-        fed6!(    $b,     $d, $e, $f, $g, $h, @without_children);
-        fed6!(        $c, $d, $e, $f, $g, $h, @without_children);
+        fed6!($a, $b, $c, $d, $e, $f;         @without_children);
+        fed6!($a, $b, $c, $d, $e,     $g;     @without_children);
+        fed6!($a, $b, $c, $d,     $f, $g;     @without_children);
+        fed6!($a, $b, $c,     $e, $f, $g;     @without_children);
+        fed6!($a, $b,     $d, $e, $f, $g;     @without_children);
+        fed6!($a,     $c, $d, $e, $f, $g;     @without_children);
+        fed6!(    $b, $c, $d, $e, $f, $g;     @without_children);
+        fed6!($a, $b, $c, $d, $e,         $h; @without_children);
+        fed6!($a, $b, $c, $d,     $f,     $h; @without_children);
+        fed6!($a, $b, $c,     $e, $f,     $h; @without_children);
+        fed6!($a, $b,     $d, $e, $f,     $h; @without_children);
+        fed6!($a,     $c, $d, $e, $f,     $h; @without_children);
+        fed6!(    $b, $c, $d, $e, $f,     $h; @without_children);
+        fed6!($a, $b, $c, $d,         $g, $h; @without_children);
+        fed6!($a, $b, $c,     $e,     $g, $h; @without_children);
+        fed6!($a, $b, $c,         $f, $g, $h; @without_children);
+        fed6!($a, $b,     $d, $e,     $g, $h; @without_children);
+        fed6!($a, $b,     $d,     $f, $g, $h; @without_children);
+        fed6!($a, $b,         $e, $f, $g, $h; @without_children);
+        fed6!($a,     $c, $d, $e,     $g, $h; @without_children);
+        fed6!($a,     $c, $d,     $f, $g, $h; @without_children);
+        fed6!($a,     $c,     $e, $f, $g, $h; @without_children);
+        fed6!($a,         $d, $e, $f, $g, $h; @without_children);
+        fed6!(    $b, $c, $d, $e,     $g, $h; @without_children);
+        fed6!(    $b, $c, $d,     $f, $g, $h; @without_children);
+        fed6!(    $b, $c,     $e, $f, $g, $h; @without_children);
+        fed6!(    $b,     $d, $e, $f, $g, $h; @without_children);
+        fed6!(        $c, $d, $e, $f, $g, $h; @without_children);
 
-        fed5!($a, $b, $c, $d, $e,             @without_children);
-        fed5!($a, $b, $c, $d,     $f,         @without_children);
-        fed5!($a, $b, $c,     $e, $f,         @without_children);
-        fed5!($a, $b,     $d, $e, $f,         @without_children);
-        fed5!($a,     $c, $d, $e, $f,         @without_children);
-        fed5!(    $b, $c, $d, $e, $f,         @without_children);
-        fed5!($a, $b, $c, $d,         $g,     @without_children);
-        fed5!($a, $b, $c,     $e,     $g,     @without_children);
-        fed5!($a, $b, $c,         $f, $g,     @without_children);
-        fed5!($a, $b,     $d, $e,     $g,     @without_children);
-        fed5!($a, $b,     $d,     $f, $g,     @without_children);
-        fed5!($a, $b,         $e, $f, $g,     @without_children);
-        fed5!($a,     $c, $d, $e,     $g,     @without_children);
-        fed5!($a,     $c, $d,     $f, $g,     @without_children);
-        fed5!($a,     $c,     $e, $f, $g,     @without_children);
-        fed5!($a,         $d, $e, $f, $g,     @without_children);
-        fed5!(    $b, $c, $d, $e,     $g,     @without_children);
-        fed5!(    $b, $c, $d,     $f, $g,     @without_children);
-        fed5!(    $b, $c,     $e, $f, $g,     @without_children);
-        fed5!(    $b,     $d, $e, $f, $g,     @without_children);
-        fed5!(        $c, $d, $e, $f, $g,     @without_children);
-        fed5!($a, $b, $c, $d,             $h, @without_children);
-        fed5!($a, $b, $c,     $e,         $h, @without_children);
-        fed5!($a, $b, $c,         $f,     $h, @without_children);
-        fed5!($a, $b,     $d, $e,         $h, @without_children);
-        fed5!($a, $b,     $d,     $f,     $h, @without_children);
-        fed5!($a, $b,         $e, $f,     $h, @without_children);
-        fed5!($a,     $c, $d, $e,         $h, @without_children);
-        fed5!($a,     $c, $d,     $f,     $h, @without_children);
-        fed5!($a,     $c,     $e, $f,     $h, @without_children);
-        fed5!($a,         $d, $e, $f,     $h, @without_children);
-        fed5!(    $b, $c, $d, $e,         $h, @without_children);
-        fed5!(    $b, $c, $d,     $f,     $h, @without_children);
-        fed5!(    $b, $c,     $e, $f,     $h, @without_children);
-        fed5!(    $b,     $d, $e, $f,     $h, @without_children);
-        fed5!(        $c, $d, $e, $f,     $h, @without_children);
-        fed5!($a, $b, $c,             $g, $h, @without_children);
-        fed5!($a, $b,     $d,         $g, $h, @without_children);
-        fed5!($a, $b,         $e,     $g, $h, @without_children);
-        fed5!($a,     $c, $d,         $g, $h, @without_children);
-        fed5!($a,     $c,     $e,     $g, $h, @without_children);
-        fed5!($a,         $d, $e,     $g, $h, @without_children);
-        fed5!(    $b, $c, $d,         $g, $h, @without_children);
-        fed5!(    $b, $c,     $e,     $g, $h, @without_children);
-        fed5!(    $b,     $d, $e,     $g, $h, @without_children);
-        fed5!(        $c, $d, $e,     $g, $h, @without_children);
-        fed5!($a, $b,             $f, $g, $h, @without_children);
-        fed5!($a,     $c,         $f, $g, $h, @without_children);
-        fed5!($a,         $d,     $f, $g, $h, @without_children);
-        fed5!($a,             $e, $f, $g, $h, @without_children);
-        fed5!(    $b, $c,         $f, $g, $h, @without_children);
-        fed5!(    $b,     $d,     $f, $g, $h, @without_children);
-        fed5!(    $b,         $e, $f, $g, $h, @without_children);
-        fed5!(        $c, $d,     $f, $g, $h, @without_children);
-        fed5!(        $c,     $e, $f, $g, $h, @without_children);
-        fed5!(            $d, $e, $f, $g, $h, @without_children);
+        fed5!($a, $b, $c, $d, $e;             @without_children);
+        fed5!($a, $b, $c, $d,     $f;         @without_children);
+        fed5!($a, $b, $c,     $e, $f;         @without_children);
+        fed5!($a, $b,     $d, $e, $f;         @without_children);
+        fed5!($a,     $c, $d, $e, $f;         @without_children);
+        fed5!(    $b, $c, $d, $e, $f;         @without_children);
+        fed5!($a, $b, $c, $d,         $g;     @without_children);
+        fed5!($a, $b, $c,     $e,     $g;     @without_children);
+        fed5!($a, $b, $c,         $f, $g;     @without_children);
+        fed5!($a, $b,     $d, $e,     $g;     @without_children);
+        fed5!($a, $b,     $d,     $f, $g;     @without_children);
+        fed5!($a, $b,         $e, $f, $g;     @without_children);
+        fed5!($a,     $c, $d, $e,     $g;     @without_children);
+        fed5!($a,     $c, $d,     $f, $g;     @without_children);
+        fed5!($a,     $c,     $e, $f, $g;     @without_children);
+        fed5!($a,         $d, $e, $f, $g;     @without_children);
+        fed5!(    $b, $c, $d, $e,     $g;     @without_children);
+        fed5!(    $b, $c, $d,     $f, $g;     @without_children);
+        fed5!(    $b, $c,     $e, $f, $g;     @without_children);
+        fed5!(    $b,     $d, $e, $f, $g;     @without_children);
+        fed5!(        $c, $d, $e, $f, $g;     @without_children);
+        fed5!($a, $b, $c, $d,             $h; @without_children);
+        fed5!($a, $b, $c,     $e,         $h; @without_children);
+        fed5!($a, $b, $c,         $f,     $h; @without_children);
+        fed5!($a, $b,     $d, $e,         $h; @without_children);
+        fed5!($a, $b,     $d,     $f,     $h; @without_children);
+        fed5!($a, $b,         $e, $f,     $h; @without_children);
+        fed5!($a,     $c, $d, $e,         $h; @without_children);
+        fed5!($a,     $c, $d,     $f,     $h; @without_children);
+        fed5!($a,     $c,     $e, $f,     $h; @without_children);
+        fed5!($a,         $d, $e, $f,     $h; @without_children);
+        fed5!(    $b, $c, $d, $e,         $h; @without_children);
+        fed5!(    $b, $c, $d,     $f,     $h; @without_children);
+        fed5!(    $b, $c,     $e, $f,     $h; @without_children);
+        fed5!(    $b,     $d, $e, $f,     $h; @without_children);
+        fed5!(        $c, $d, $e, $f,     $h; @without_children);
+        fed5!($a, $b, $c,             $g, $h; @without_children);
+        fed5!($a, $b,     $d,         $g, $h; @without_children);
+        fed5!($a, $b,         $e,     $g, $h; @without_children);
+        fed5!($a,     $c, $d,         $g, $h; @without_children);
+        fed5!($a,     $c,     $e,     $g, $h; @without_children);
+        fed5!($a,         $d, $e,     $g, $h; @without_children);
+        fed5!(    $b, $c, $d,         $g, $h; @without_children);
+        fed5!(    $b, $c,     $e,     $g, $h; @without_children);
+        fed5!(    $b,     $d, $e,     $g, $h; @without_children);
+        fed5!(        $c, $d, $e,     $g, $h; @without_children);
+        fed5!($a, $b,             $f, $g, $h; @without_children);
+        fed5!($a,     $c,         $f, $g, $h; @without_children);
+        fed5!($a,         $d,     $f, $g, $h; @without_children);
+        fed5!($a,             $e, $f, $g, $h; @without_children);
+        fed5!(    $b, $c,         $f, $g, $h; @without_children);
+        fed5!(    $b,     $d,     $f, $g, $h; @without_children);
+        fed5!(    $b,         $e, $f, $g, $h; @without_children);
+        fed5!(        $c, $d,     $f, $g, $h; @without_children);
+        fed5!(        $c,     $e, $f, $g, $h; @without_children);
+        fed5!(            $d, $e, $f, $g, $h; @without_children);
 
-        fed4!($a, $b, $c, $d,                 @without_children);
-        fed4!($a, $b, $c,     $e,             @without_children);
-        fed4!($a, $b, $c,         $f,         @without_children);
-        fed4!($a, $b,     $d, $e,             @without_children);
-        fed4!($a, $b,     $d,     $f,         @without_children);
-        fed4!($a, $b,         $e, $f,         @without_children);
-        fed4!($a,     $c, $d, $e,             @without_children);
-        fed4!($a,     $c, $d,     $f,         @without_children);
-        fed4!($a,     $c,     $e, $f,         @without_children);
-        fed4!($a,         $d, $e, $f,         @without_children);
-        fed4!(    $b, $c, $d, $e,             @without_children);
-        fed4!(    $b, $c, $d,     $f,         @without_children);
-        fed4!(    $b, $c,     $e, $f,         @without_children);
-        fed4!(    $b,     $d, $e, $f,         @without_children);
-        fed4!(        $c, $d, $e, $f,         @without_children);
-        fed4!($a, $b, $c,             $g,     @without_children);
-        fed4!($a, $b,     $d,         $g,     @without_children);
-        fed4!($a, $b,         $e,     $g,     @without_children);
-        fed4!($a,     $c, $d,         $g,     @without_children);
-        fed4!($a,     $c,     $e,     $g,     @without_children);
-        fed4!($a,         $d, $e,     $g,     @without_children);
-        fed4!(    $b, $c, $d,         $g,     @without_children);
-        fed4!(    $b, $c,     $e,     $g,     @without_children);
-        fed4!(    $b,     $d, $e,     $g,     @without_children);
-        fed4!(        $c, $d, $e,     $g,     @without_children);
-        fed4!($a, $b,             $f, $g,     @without_children);
-        fed4!($a,     $c,         $f, $g,     @without_children);
-        fed4!($a,         $d,     $f, $g,     @without_children);
-        fed4!($a,             $e, $f, $g,     @without_children);
-        fed4!(    $b, $c,         $f, $g,     @without_children);
-        fed4!(    $b,     $d,     $f, $g,     @without_children);
-        fed4!(    $b,         $e, $f, $g,     @without_children);
-        fed4!(        $c, $d,     $f, $g,     @without_children);
-        fed4!(        $c,     $e, $f, $g,     @without_children);
-        fed4!(            $d, $e, $f, $g,     @without_children);
-        fed4!($a, $b, $c,                 $h, @without_children);
-        fed4!($a, $b,     $d,             $h, @without_children);
-        fed4!($a, $b,         $e,         $h, @without_children);
-        fed4!($a,     $c, $d,             $h, @without_children);
-        fed4!($a,     $c,     $e,         $h, @without_children);
-        fed4!($a,         $d, $e,         $h, @without_children);
-        fed4!(    $b, $c, $d,             $h, @without_children);
-        fed4!(    $b, $c,     $e,         $h, @without_children);
-        fed4!(    $b,     $d, $e,         $h, @without_children);
-        fed4!(        $c, $d, $e,         $h, @without_children);
-        fed4!($a, $b,             $f,     $h, @without_children);
-        fed4!($a,     $c,         $f,     $h, @without_children);
-        fed4!($a,         $d,     $f,     $h, @without_children);
-        fed4!($a,             $e, $f,     $h, @without_children);
-        fed4!(    $b, $c,         $f,     $h, @without_children);
-        fed4!(    $b,     $d,     $f,     $h, @without_children);
-        fed4!(    $b,         $e, $f,     $h, @without_children);
-        fed4!(        $c, $d,     $f,     $h, @without_children);
-        fed4!(        $c,     $e, $f,     $h, @without_children);
-        fed4!(            $d, $e, $f,     $h, @without_children);
-        fed4!($a, $b,                 $g, $h, @without_children);
-        fed4!($a,     $c,             $g, $h, @without_children);
-        fed4!($a,         $d,         $g, $h, @without_children);
-        fed4!($a,             $e,     $g, $h, @without_children);
-        fed4!($a,                 $f, $g, $h, @without_children);
-        fed4!(    $b, $c,             $g, $h, @without_children);
-        fed4!(    $b,     $d,         $g, $h, @without_children);
-        fed4!(    $b,         $e,     $g, $h, @without_children);
-        fed4!(    $b,             $f, $g, $h, @without_children);
-        fed4!(        $c, $d,         $g, $h, @without_children);
-        fed4!(        $c,     $e,     $g, $h, @without_children);
-        fed4!(        $c,         $f, $g, $h, @without_children);
-        fed4!(            $d, $e,     $g, $h, @without_children);
-        fed4!(            $d,     $f, $g, $h, @without_children);
-        fed4!(                $e, $f, $g, $h, @without_children);
+        fed4!($a, $b, $c, $d;                 @without_children);
+        fed4!($a, $b, $c,     $e;             @without_children);
+        fed4!($a, $b, $c,         $f;         @without_children);
+        fed4!($a, $b,     $d, $e;             @without_children);
+        fed4!($a, $b,     $d,     $f;         @without_children);
+        fed4!($a, $b,         $e, $f;         @without_children);
+        fed4!($a,     $c, $d, $e;             @without_children);
+        fed4!($a,     $c, $d,     $f;         @without_children);
+        fed4!($a,     $c,     $e, $f;         @without_children);
+        fed4!($a,         $d, $e, $f;         @without_children);
+        fed4!(    $b, $c, $d, $e;             @without_children);
+        fed4!(    $b, $c, $d,     $f;         @without_children);
+        fed4!(    $b, $c,     $e, $f;         @without_children);
+        fed4!(    $b,     $d, $e, $f;         @without_children);
+        fed4!(        $c, $d, $e, $f;         @without_children);
+        fed4!($a, $b, $c,             $g;     @without_children);
+        fed4!($a, $b,     $d,         $g;     @without_children);
+        fed4!($a, $b,         $e,     $g;     @without_children);
+        fed4!($a,     $c, $d,         $g;     @without_children);
+        fed4!($a,     $c,     $e,     $g;     @without_children);
+        fed4!($a,         $d, $e,     $g;     @without_children);
+        fed4!(    $b, $c, $d,         $g;     @without_children);
+        fed4!(    $b, $c,     $e,     $g;     @without_children);
+        fed4!(    $b,     $d, $e,     $g;     @without_children);
+        fed4!(        $c, $d, $e,     $g;     @without_children);
+        fed4!($a, $b,             $f, $g;     @without_children);
+        fed4!($a,     $c,         $f, $g;     @without_children);
+        fed4!($a,         $d,     $f, $g;     @without_children);
+        fed4!($a,             $e, $f, $g;     @without_children);
+        fed4!(    $b, $c,         $f, $g;     @without_children);
+        fed4!(    $b,     $d,     $f, $g;     @without_children);
+        fed4!(    $b,         $e, $f, $g;     @without_children);
+        fed4!(        $c, $d,     $f, $g;     @without_children);
+        fed4!(        $c,     $e, $f, $g;     @without_children);
+        fed4!(            $d, $e, $f, $g;     @without_children);
+        fed4!($a, $b, $c,                 $h; @without_children);
+        fed4!($a, $b,     $d,             $h; @without_children);
+        fed4!($a, $b,         $e,         $h; @without_children);
+        fed4!($a,     $c, $d,             $h; @without_children);
+        fed4!($a,     $c,     $e,         $h; @without_children);
+        fed4!($a,         $d, $e,         $h; @without_children);
+        fed4!(    $b, $c, $d,             $h; @without_children);
+        fed4!(    $b, $c,     $e,         $h; @without_children);
+        fed4!(    $b,     $d, $e,         $h; @without_children);
+        fed4!(        $c, $d, $e,         $h; @without_children);
+        fed4!($a, $b,             $f,     $h; @without_children);
+        fed4!($a,     $c,         $f,     $h; @without_children);
+        fed4!($a,         $d,     $f,     $h; @without_children);
+        fed4!($a,             $e, $f,     $h; @without_children);
+        fed4!(    $b, $c,         $f,     $h; @without_children);
+        fed4!(    $b,     $d,     $f,     $h; @without_children);
+        fed4!(    $b,         $e, $f,     $h; @without_children);
+        fed4!(        $c, $d,     $f,     $h; @without_children);
+        fed4!(        $c,     $e, $f,     $h; @without_children);
+        fed4!(            $d, $e, $f,     $h; @without_children);
+        fed4!($a, $b,                 $g, $h; @without_children);
+        fed4!($a,     $c,             $g, $h; @without_children);
+        fed4!($a,         $d,         $g, $h; @without_children);
+        fed4!($a,             $e,     $g, $h; @without_children);
+        fed4!($a,                 $f, $g, $h; @without_children);
+        fed4!(    $b, $c,             $g, $h; @without_children);
+        fed4!(    $b,     $d,         $g, $h; @without_children);
+        fed4!(    $b,         $e,     $g, $h; @without_children);
+        fed4!(    $b,             $f, $g, $h; @without_children);
+        fed4!(        $c, $d,         $g, $h; @without_children);
+        fed4!(        $c,     $e,     $g, $h; @without_children);
+        fed4!(        $c,         $f, $g, $h; @without_children);
+        fed4!(            $d, $e,     $g, $h; @without_children);
+        fed4!(            $d,     $f, $g, $h; @without_children);
+        fed4!(                $e, $f, $g, $h; @without_children);
 
-        fed3!($a, $b, $c,                     @without_children);
-        fed3!($a, $b,     $d,                 @without_children);
-        fed3!($a, $b,         $e,             @without_children);
-        fed3!($a,     $c, $d,                 @without_children);
-        fed3!($a,     $c,     $e,             @without_children);
-        fed3!($a,         $d, $e,             @without_children);
-        fed3!(    $b, $c, $d,                 @without_children);
-        fed3!(    $b, $c,     $e,             @without_children);
-        fed3!(    $b,     $d, $e,             @without_children);
-        fed3!(        $c, $d, $e,             @without_children);
-        fed3!($a, $b,             $f,         @without_children);
-        fed3!($a,     $c,         $f,         @without_children);
-        fed3!($a,         $d,     $f,         @without_children);
-        fed3!($a,             $e, $f,         @without_children);
-        fed3!(    $b, $c,         $f,         @without_children);
-        fed3!(    $b,     $d,     $f,         @without_children);
-        fed3!(    $b,         $e, $f,         @without_children);
-        fed3!(        $c, $d,     $f,         @without_children);
-        fed3!(        $c,     $e, $f,         @without_children);
-        fed3!(            $d, $e, $f,         @without_children);
-        fed3!($a, $b,                 $g,     @without_children);
-        fed3!($a,     $c,             $g,     @without_children);
-        fed3!($a,         $d,         $g,     @without_children);
-        fed3!($a,             $e,     $g,     @without_children);
-        fed3!($a,                 $f, $g,     @without_children);
-        fed3!(    $b, $c,             $g,     @without_children);
-        fed3!(    $b,     $d,         $g,     @without_children);
-        fed3!(    $b,         $e,     $g,     @without_children);
-        fed3!(    $b,             $f, $g,     @without_children);
-        fed3!(        $c, $d,         $g,     @without_children);
-        fed3!(        $c,     $e,     $g,     @without_children);
-        fed3!(        $c,         $f, $g,     @without_children);
-        fed3!(            $d, $e,     $g,     @without_children);
-        fed3!(            $d,     $f, $g,     @without_children);
-        fed3!(                $e, $f, $g,     @without_children);
-        fed3!($a, $b,                     $h, @without_children);
-        fed3!($a,     $c,                 $h, @without_children);
-        fed3!($a,         $d,             $h, @without_children);
-        fed3!($a,             $e,         $h, @without_children);
-        fed3!($a,                 $f,     $h, @without_children);
-        fed3!($a,                     $g, $h, @without_children);
-        fed3!(    $b, $c,                 $h, @without_children);
-        fed3!(    $b,     $d,             $h, @without_children);
-        fed3!(    $b,         $e,         $h, @without_children);
-        fed3!(    $b,             $f,     $h, @without_children);
-        fed3!(    $b,                 $g, $h, @without_children);
-        fed3!(        $c, $d,             $h, @without_children);
-        fed3!(        $c,     $e,         $h, @without_children);
-        fed3!(        $c,         $f,     $h, @without_children);
-        fed3!(        $c,             $g, $h, @without_children);
-        fed3!(            $d, $e,         $h, @without_children);
-        fed3!(            $d,     $f,     $h, @without_children);
-        fed3!(            $d,         $g, $h, @without_children);
-        fed3!(                $e, $f,     $h, @without_children);
-        fed3!(                $e,     $g, $h, @without_children);
-        fed3!(                    $f, $g, $h, @without_children);
+        fed3!($a, $b, $c;                     @without_children);
+        fed3!($a, $b,     $d;                 @without_children);
+        fed3!($a, $b,         $e;             @without_children);
+        fed3!($a,     $c, $d;                 @without_children);
+        fed3!($a,     $c,     $e;             @without_children);
+        fed3!($a,         $d, $e;             @without_children);
+        fed3!(    $b, $c, $d;                 @without_children);
+        fed3!(    $b, $c,     $e;             @without_children);
+        fed3!(    $b,     $d, $e;             @without_children);
+        fed3!(        $c, $d, $e;             @without_children);
+        fed3!($a, $b,             $f;         @without_children);
+        fed3!($a,     $c,         $f;         @without_children);
+        fed3!($a,         $d,     $f;         @without_children);
+        fed3!($a,             $e, $f;         @without_children);
+        fed3!(    $b, $c,         $f;         @without_children);
+        fed3!(    $b,     $d,     $f;         @without_children);
+        fed3!(    $b,         $e, $f;         @without_children);
+        fed3!(        $c, $d,     $f;         @without_children);
+        fed3!(        $c,     $e, $f;         @without_children);
+        fed3!(            $d, $e, $f;         @without_children);
+        fed3!($a, $b,                 $g;     @without_children);
+        fed3!($a,     $c,             $g;     @without_children);
+        fed3!($a,         $d,         $g;     @without_children);
+        fed3!($a,             $e,     $g;     @without_children);
+        fed3!($a,                 $f, $g;     @without_children);
+        fed3!(    $b, $c,             $g;     @without_children);
+        fed3!(    $b,     $d,         $g;     @without_children);
+        fed3!(    $b,         $e,     $g;     @without_children);
+        fed3!(    $b,             $f, $g;     @without_children);
+        fed3!(        $c, $d,         $g;     @without_children);
+        fed3!(        $c,     $e,     $g;     @without_children);
+        fed3!(        $c,         $f, $g;     @without_children);
+        fed3!(            $d, $e,     $g;     @without_children);
+        fed3!(            $d,     $f, $g;     @without_children);
+        fed3!(                $e, $f, $g;     @without_children);
+        fed3!($a, $b,                     $h; @without_children);
+        fed3!($a,     $c,                 $h; @without_children);
+        fed3!($a,         $d,             $h; @without_children);
+        fed3!($a,             $e,         $h; @without_children);
+        fed3!($a,                 $f,     $h; @without_children);
+        fed3!($a,                     $g, $h; @without_children);
+        fed3!(    $b, $c,                 $h; @without_children);
+        fed3!(    $b,     $d,             $h; @without_children);
+        fed3!(    $b,         $e,         $h; @without_children);
+        fed3!(    $b,             $f,     $h; @without_children);
+        fed3!(    $b,                 $g, $h; @without_children);
+        fed3!(        $c, $d,             $h; @without_children);
+        fed3!(        $c,     $e,         $h; @without_children);
+        fed3!(        $c,         $f,     $h; @without_children);
+        fed3!(        $c,             $g, $h; @without_children);
+        fed3!(            $d, $e,         $h; @without_children);
+        fed3!(            $d,     $f,     $h; @without_children);
+        fed3!(            $d,         $g, $h; @without_children);
+        fed3!(                $e, $f,     $h; @without_children);
+        fed3!(                $e,     $g, $h; @without_children);
+        fed3!(                    $f, $g, $h; @without_children);
 
-        fed2!($a, $b,                         @without_children);
-        fed2!($a,     $c,                     @without_children);
-        fed2!($a,         $d,                 @without_children);
-        fed2!($a,             $e,             @without_children);
-        fed2!($a,                 $f,         @without_children);
-        fed2!($a,                     $g,     @without_children);
-        fed2!($a,                         $h, @without_children);
-        fed2!(    $b, $c,                     @without_children);
-        fed2!(    $b,     $d,                 @without_children);
-        fed2!(    $b,         $e,             @without_children);
-        fed2!(    $b,             $f,         @without_children);
-        fed2!(    $b,                 $g,     @without_children);
-        fed2!(    $b,                     $h, @without_children);
-        fed2!(        $c, $d,                 @without_children);
-        fed2!(        $c,     $e,             @without_children);
-        fed2!(        $c,         $f,         @without_children);
-        fed2!(        $c,             $g,     @without_children);
-        fed2!(        $c,                 $h, @without_children);
-        fed2!(            $d, $e,             @without_children);
-        fed2!(            $d,     $f,         @without_children);
-        fed2!(            $d,         $g,     @without_children);
-        fed2!(            $d,             $h, @without_children);
-        fed2!(                $e, $f,         @without_children);
-        fed2!(                $e,     $g,     @without_children);
-        fed2!(                $e,         $h, @without_children);
-        fed2!(                    $f, $g,     @without_children);
-        fed2!(                    $f,     $h, @without_children);
-        fed2!(                        $g, $h, @without_children);
+        fed2!($a, $b;                         @without_children);
+        fed2!($a,     $c;                     @without_children);
+        fed2!($a,         $d;                 @without_children);
+        fed2!($a,             $e;             @without_children);
+        fed2!($a,                 $f;         @without_children);
+        fed2!($a,                     $g;     @without_children);
+        fed2!($a,                         $h; @without_children);
+        fed2!(    $b, $c;                     @without_children);
+        fed2!(    $b,     $d;                 @without_children);
+        fed2!(    $b,         $e;             @without_children);
+        fed2!(    $b,             $f;         @without_children);
+        fed2!(    $b,                 $g;     @without_children);
+        fed2!(    $b,                     $h; @without_children);
+        fed2!(        $c, $d;                 @without_children);
+        fed2!(        $c,     $e;             @without_children);
+        fed2!(        $c,         $f;         @without_children);
+        fed2!(        $c,             $g;     @without_children);
+        fed2!(        $c,                 $h; @without_children);
+        fed2!(            $d, $e;             @without_children);
+        fed2!(            $d,     $f;         @without_children);
+        fed2!(            $d,         $g;     @without_children);
+        fed2!(            $d,             $h; @without_children);
+        fed2!(                $e, $f;         @without_children);
+        fed2!(                $e,     $g;     @without_children);
+        fed2!(                $e,         $h; @without_children);
+        fed2!(                    $f, $g;     @without_children);
+        fed2!(                    $f,     $h; @without_children);
+        fed2!(                        $g, $h; @without_children);
 
-        fed8!($newtype; $a, $b, $c, $d, $e, $f, $g, $h, @without_children);
+        fed8!($newtype; $a, $b, $c, $d, $e, $f, $g, $h; @without_children);
     };
 }
 
@@ -1617,18 +1752,16 @@ macro_rules! fed8 {
 ///     }
 /// ```
 
-macro_rules! fed_vec {
-    ($($element:expr),*,) => { vec![
-        $(
-        ($element).into()
-        ),*
-    ] };
-}
-
 #[cfg(test)]
 mod test {
     init_fed!();
     use self::fed::*;
+
+    macro_rules! fed_vec {
+        ($($element:expr),*,) => { vec![
+            $( ($element).into()),*
+        ] };
+    }
 
     fed!(
         String,
@@ -1645,6 +1778,41 @@ mod test {
         f32,
         f64
     );
+
+    #[test]
+    fn test_map_all() {
+        let var: Fed1<String> = String::from("abc").into();
+        assert_eq!(
+            var.map_all(
+                |string: String| string.contains('b')
+            ),
+            true
+        );
+
+        let var: Fed3<String, bool, u8> = String::from("abc").into();
+        assert_eq!(
+            var.map_all(
+                |string:  String| string.contains('b'),
+                |boolean: bool|   boolean,
+                |_:       u8|     false,
+            ),
+            true
+        );
+
+        let var: Fed3<String, bool, u8> = String::from("abc").into();
+        let var: Fed2<bool, u8> = var.map_all(
+            |string:  String| string.contains('b').into(),
+            |boolean: bool  | boolean.into(),
+            |num:     u8    | num.into(),
+        );
+        assert_eq!(var, true.into());
+    }
+
+    #[test]
+    fn test_as_ref() {
+        let val: Fed3<String, bool, u8> = String::from("abc").into();
+        assert_eq!(val.as_ref(), (&String::from("abc")).into());
+    }
 
     #[test]
     fn tester() {
@@ -1763,101 +1931,98 @@ mod test {
     }
 
     #[test]
-    fn test_map_all() {
+    fn test_map_all2() {
         let var: Fed4<B1, B2, B3, B4> = B2.into();
 
         assert_eq!(var, B2.into());
 
-        assert_eq!(
-            var.map_all::<Fed2<B1, B3>>(
-                &|b: B1| b.into(),
-                &|_: B2| B3.into(),
-                &|b: B3| b.into(),
-                &|_: B4| B3.into(),
-            ),
-            B3.into()
+        let mapped: Fed2<B1, B3> = var.map_all(
+            |b: B1| b.into(),
+            |_: B2| B3.into(),
+            |b: B3| b.into(),
+            |_: B4| B3.into(),
         );
+        assert_eq!(mapped, B3.into());
 
         let var2: Fed3<B1, B2, B4> = B2.into();
         assert_eq!(var, var2.into());
     }
 
     #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
-    struct Some_<T>(pub T);
+    struct Nothing;
 
-    #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
-    struct None_;
+    type Maybe<T> = Fed2<T, Nothing>;
 
-    fed!(Some_<bool>, None_);
-    fed!(Some_<String>, None_);
+    fed!(bool, Nothing);
+    fed!(String, Nothing);
+    fed!(u8, Nothing);
 
-    #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
-    struct Option_<T>(pub Fed2<Some_<T>, None_>);
+    trait MaybeConstraint<T>: From<T> + From<Nothing> {}
+    impl<T> MaybeConstraint<T> for Maybe<T> where Maybe<T>: From<T> + From<Nothing> {}
 
-    impl<T> From<T> for Option_<T>
-    where Fed2<Some_<T>, None_>: From<Some_<T>> {
-        fn from(t: T) -> Self {
-            Option_(Some_(t).into())
-        }
-    }
-
-    impl<T> Option_<T>
-    where
-        Fed2<Some_<T>, None_>: From<Some_<T>> + From<None_>,
+    impl<T> Default for Maybe<T>
+    where Self: MaybeConstraint<T>
     {
-        pub fn map<U, F>(self, verb: &F) -> Option_<U>
-        where
-            Fed2<Some_<U>, None_>: From<Some_<U>> + From<None_>,
-            F: Fn(T) -> U,
-        {
-            let Option_(inner) = self;
-
-            Option_(inner.map_all(
-                &|some: Some_<T>| {
-                    let Some_(inner) = some;
-                    Some_(verb(inner)).into()
-                },
-                &|none: None_| none.into(),
-            ))
+        fn default() -> Self {
+            Nothing.into()
         }
     }
 
-    impl<T> Into<Option<T>> for Option_<T>
-    where
-        Fed2<Some_<T>, None_>: From<Some_<T>> + From<None_>,
+
+    impl<T> Maybe<T>
+    where Self: MaybeConstraint<T>
+    {
+        pub fn map<U, F>(self, verb: F) -> Maybe<U>
+        where
+            Maybe<U>: MaybeConstraint<U>,
+            F: FnOnce(T) -> U,
+        {
+            self.map_all(
+                |some: T| verb(some).into(),
+                |_|       Nothing.into(),
+            )
+        }
+
+        pub fn unwrap(self) -> T {
+            self.map_all(
+                |t| t,
+                |_: Nothing| panic!("called `Maybe<_>::unwrap()` on a `Nothing` value"),
+            )
+        }
+    }
+
+    impl<T> Into<Option<T>> for Maybe<T>
+    where Self: MaybeConstraint<T>
     {
         fn into(self) -> Option<T> {
-            let Option_(inner) = self;
-            inner.map_all(
-                &|some: Some_<T>| {
-                    let Some_(inner) = some;
-                    Some(inner)
-                },
-                &|_: None_| None,
-            )
+            self.map_all(Some, |_| None)
         }
     }
 
     #[test]
     fn fake_option() {
-        let options: Vec<Option_<_>> = fed_vec![
-            Option_(None_.into()),
+        let options: Vec<Maybe<_>> = fed_vec![
+            Nothing,
             true,
             false,
         ];
 
         let options2: Vec<_> = options.iter().cloned()
             .map(|option| {
-                option.map(&|boolean| format!("{}", boolean))
+                option.map(|boolean| boolean.to_string())
             }).collect();
 
-        let options3: Vec<Option_<_>> = fed_vec![
-            Option_(None_.into()),
+        let options3: Vec<Maybe<_>> = fed_vec![
+            Nothing,
             String::from("true"),
             String::from("false"),
         ];
 
         assert_eq!(options2, options3);
+
+        let maybe_num: Maybe<_> = 33.into();
+        assert_eq!(maybe_num, 33.into());
+        assert_eq!(maybe_num.unwrap(), 33);
     }
 
     pub struct Value(pub ValueT);
