@@ -73,8 +73,8 @@
 
 #[macro_export]
 macro_rules! basic_fed {
-    ($typename:ident, $(($letter:ident, $f_letter:ident) => [$enum_var:ident; $arg_name:ident]),*,) => {
-        #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+    ($typename:ident, @deriving:[$($derive_trait:ident),*], $(($letter:ident, $f_letter:ident) => [$enum_var:ident; $arg_name:ident]),*,) => {
+        #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash, $($derive_trait),*)]
         pub enum $typename< $($letter),* > {
             $(
             $enum_var($letter)
@@ -118,7 +118,8 @@ macro_rules! basic_fed {
 /// types.
 #[macro_export]
 macro_rules! init_fed {
-    () => {
+    () => { init_fed!(@deriving:[]); };
+    (@deriving:[$($derive_trait:ident),*]) => {
         #[allow(dead_code)]
         pub mod fed {
             pub trait Fed: Sized {
@@ -225,12 +226,14 @@ macro_rules! init_fed {
 
             basic_fed!{
                 Fed2,
+                @deriving:[$($derive_trait),*],
                 (A, FA) => [T1; f_1],
                 (B, FB) => [T2; f_2],
             }
 
             basic_fed!{
                 Fed3,
+                @deriving:[$($derive_trait),*],
                 (A, FA) => [T1; f_1],
                 (B, FB) => [T2; f_2],
                 (C, FC) => [T3; f_3],
@@ -238,6 +241,7 @@ macro_rules! init_fed {
 
             basic_fed!{
                 Fed4,
+                @deriving:[$($derive_trait),*],
                 (A, FA) => [T1; f_1],
                 (B, FB) => [T2; f_2],
                 (C, FC) => [T3; f_3],
@@ -246,6 +250,7 @@ macro_rules! init_fed {
 
             basic_fed!{
                 Fed5,
+                @deriving:[$($derive_trait),*],
                 (A, FA) => [T1; f_1],
                 (B, FB) => [T2; f_2],
                 (C, FC) => [T3; f_3],
@@ -255,6 +260,7 @@ macro_rules! init_fed {
 
             basic_fed!{
                 Fed6,
+                @deriving:[$($derive_trait),*],
                 (A, FA) => [T1; f_1],
                 (B, FB) => [T2; f_2],
                 (C, FC) => [T3; f_3],
@@ -265,6 +271,7 @@ macro_rules! init_fed {
 
             basic_fed!{
                 Fed7,
+                @deriving:[$($derive_trait),*],
                 (A, FA) => [T1; f_1],
                 (B, FB) => [T2; f_2],
                 (C, FC) => [T3; f_3],
@@ -276,6 +283,7 @@ macro_rules! init_fed {
 
             basic_fed!{
                 Fed8,
+                @deriving:[$($derive_trait),*],
                 (A, FA) => [T1; f_1],
                 (B, FB) => [T2; f_2],
                 (C, FC) => [T3; f_3],
