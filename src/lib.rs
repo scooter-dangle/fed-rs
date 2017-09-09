@@ -157,10 +157,10 @@ macro_rules! init_fed {
             }
 
             /// A 'never' type
-            #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+            #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash, $($derive_trait),*)]
             pub enum Fed0 {}
 
-            #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+            #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash, $($derive_trait),*)]
             pub enum Fed1<A> {
                 T1(A),
             }

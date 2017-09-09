@@ -1,12 +1,12 @@
 [package]
 name = "fed"
-version = "0.4.0"
+version = "0.4.1"
 authors = ["Scott Steele <scottlsteele@gmail.com>"]
 
 homepage = "https://github.com/scooter-dangle/fed-rs"
 repository = "https://github.com/scooter-dangle/fed-rs"
 description = "A sketch implementation of anonymous, tagged unions in stable Rust"
-documentation = "https://docs.rs/fed/0.2.2/fed"
+documentation = "https://docs.rs/fed"
 
 license = "Apache-2.0"
 

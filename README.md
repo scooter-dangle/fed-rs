@@ -7,7 +7,7 @@ In your Cargo.toml file:
 
 ```toml
 [dependencies]
-fed = "0.2"
+fed = "0.4"
 ```
 
 In order to be able to declare type federations, the various `Fed*` types need
@@ -76,4 +76,19 @@ let vec: Vec<Fed3<usize, bool, char>> = vec![
 
 assert_eq!(vec.iter().filter(Fed::is::<usize>).count(), 2);
 assert_eq!(vec[3].extract::<char>(), Ok('A'));
+```
+
+Deriving non-std traits
+-----------------------
+When declared via the `init_fed!` macro call, the type federation structs
+(`Fed0`, `Fed1`, ... `Fed8`) derive all the built-in `#![derive(...)]` traits
+(e.g., `Copy`, `Debug`). If you need additional derivable traits (e.g.,
+serde's `Serialize` and `Deserialize`) , include them as a special argument to
+`init_fed!` using the following syntax:
+
+```rust
+#[macro_use]
+extern crate serde_derive;
+
+init_fed!(@deriving: [Serialize, Deserialize]);
 ```
