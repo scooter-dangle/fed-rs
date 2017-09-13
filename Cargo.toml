@@ -1,12 +1,15 @@
 [package]
 name = "fed"
-version = "0.4.2"
+version = "0.4.3"
 authors = ["Scott Steele <scottlsteele@gmail.com>"]
 
 homepage = "https://github.com/scooter-dangle/fed-rs"
 repository = "https://github.com/scooter-dangle/fed-rs"
 description = "A sketch implementation of anonymous, tagged unions in stable Rust"
 documentation = "https://docs.rs/fed"
+categories = ["data-structures", "rust-patterns"]
+keywords = ["type", "union", "polymorphic", "variant", "anonymous"]
+readme = "README.md"
 
 license = "Apache-2.0"
 
