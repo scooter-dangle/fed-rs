@@ -42,6 +42,114 @@
 //! module anywhere we want to use type federations. If this crate sees any use where this is an
 //! issue, I might work on fixing that. But this is largely intended for prototyping the feature to
 //! determine whether a fully fledged, built-in version would be useful for Rust to have.
+//!
+//! ## Recursive types
+//!
+//! Types like these could—for example—be useful for replacing much of the boilerplate used to
+//! express serialization formats like JSON and TOML.
+//!
+//! ```
+//! # #[macro_use]
+//! # extern crate fed as _fed;
+//! # init_fed!();
+//! # use fed::*;
+//! // Wrapping ValueT in a newtype struct breaks the cyclic reference so that
+//! // we can make a recursive type.
+//! pub struct Value(pub ValueT);
+//! type ValueT = Fed3<i32, String, Array>;
+//! type Array = Vec<Value>;
+//! fed!(
+//!     i32,
+//!     String,
+//!     Array,
+//! );
+//! // (Would also want to implement utility traits like `Deref<Target=ValueT> for Value` and
+//! // `From<ValueT> for Value`.)
+//!
+//! # use ::std::ops::Deref;
+//! # impl Deref for Value {
+//! #     type Target = ValueT;
+//! #
+//! #     fn deref(&self) -> &Self::Target {
+//! #         &self.0
+//! #     }
+//! # }
+//! #
+//! # impl From<ValueT> for Value {
+//! #     fn from(value: ValueT) -> Self {
+//! #         Value(value)
+//! #     }
+//! # }
+//! #
+//! # fn main() {
+//! let value = Value(123.into());
+//! assert!((*value).is::<i32>());
+//! # }
+//! ```
+//!
+//! Tidying instantiation up with a simple macro enables the following.
+//!
+//! ```
+//! # #[macro_use]
+//! # extern crate fed as _fed;
+//! # init_fed!();
+//! # use fed::*;
+//! # pub struct Value(pub ValueT);
+//! # type ValueT = Fed3<i32, String, Array>;
+//! # type Array = Vec<Value>;
+//! # fed!(
+//! #     i32,
+//! #     String,
+//! #     Array,
+//! # );
+//! # use ::std::ops::Deref;
+//! # impl Deref for Value {
+//! #     type Target = ValueT;
+//! #
+//! #     fn deref(&self) -> &Self::Target {
+//! #         &self.0
+//! #     }
+//! # }
+//! #
+//! # impl From<ValueT> for Value {
+//! #     fn from(value: ValueT) -> Self {
+//! #         Value(value)
+//! #     }
+//! # }
+//! #
+//! # macro_rules! array {
+//! #     ($($item:expr,)*) => {
+//! #         vec![$(Value($item.into()),)*]
+//! #     };
+//! #     ($($item:expr),*) => { array![$($item,)*] };
+//! # }
+//! #
+//! # fn main() {
+//! let ary = array![
+//!     32,
+//!     String::from("abc"),
+//!     array![
+//!         String::from("nesting!"),
+//!         array![],
+//!         8,
+//!     ],
+//!     74,
+//! ];
+//!
+//! assert!(ary[0].deref().is::<i32>());
+//! assert_eq!(ary[1].as_ref().extract::<&String>().ok().unwrap(), "abc");
+//! assert_eq!(ary[2].as_ref().extract::<&Array>().unwrap().len(), 3);
+//! assert!(
+//!     ary[2]
+//!     .as_ref()
+//!     .extract::<&Array>()
+//!     .unwrap()
+//!     [0]
+//!     .deref()
+//!     .is::<String>()
+//! );
+//! # }
+//! ```
 
 // // Doesn't work...complains about duplicate implementations.
 // // Have to implement non-generically (with concrete types)
@@ -384,6 +492,7 @@ macro_rules! init_fed {
             }
         }
     };
+    (@deriving:[$($derive_trait:ident,)*]) => { init_fed!(@deriving:[$($derive_trait),*]); };
 }
 
 #[macro_export]
@@ -2033,6 +2142,8 @@ mod test {
         assert_eq!(maybe_num.unwrap(), 33);
     }
 
+    // Wrapping ValueT in a newtype struct breaks the cyclic reference so that
+    // we can make a recursive type.
     pub struct Value(pub ValueT);
     type ValueT = Fed3<i32, String, Array>;
     type Array = Vec<Value>;
@@ -2059,8 +2170,35 @@ mod test {
 
     #[test]
     fn recursive() {
-        let value: Value = ValueT::from(123).into();
+        let value = Value(123.into());
 
         assert!((*value).is::<i32>());
+    }
+
+    macro_rules! array {
+        ($($item:expr,)*) => {
+            vec![$(Value($item.into()),)*]
+        };
+        ($($item:expr),*) => { array![$($item,)*] };
+    }
+
+    #[test]
+    fn recursive2() {
+        let ary = array![
+            32,
+            String::from("abc"),
+            array![1, 2, 3],
+            74,
+        ];
+
+        // TODO Should consider implementing `Fed` for types that deref to
+        // types that implement `Is_<_>` to avoid having to call `deref`
+        // explicitly here
+        assert!(ary[0].deref().is::<i32>());
+        assert_eq!(ary[1].as_ref().extract::<&String>().ok().unwrap(), "abc");
+        // TODO Should consider implementing an `extract_ref` method that
+        // combines `as_ref` with `extract`... May end up being a common idiom.
+        assert_eq!(ary[2].as_ref().extract::<&Array>().unwrap().len(), 3);
+        assert_eq!(ary[2].as_ref().extract::<&Array>().unwrap()[0].as_ref().extract::<&i32>().ok().unwrap(), &1);
     }
 }

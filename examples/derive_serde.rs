@@ -20,9 +20,9 @@ fed!(
 fn main() {
     let a: Fed4<_,_,_,_> = 42.into();
 
-    let encoded: Vec<u8> = serialize(&a, Infinite).unwrap();
+    let encoded = serialize(&a, Infinite).unwrap();
 
-    let decoded: Fed4<_,_,_,_> = deserialize(&encoded[..]).unwrap();
+    let decoded = deserialize(&encoded[..]).unwrap();
 
     assert_eq!(a, decoded);
 }
