@@ -2202,3 +2202,35 @@ mod test {
         assert_eq!(ary[2].as_ref().extract::<&Array>().unwrap()[0].as_ref().extract::<&i32>().ok().unwrap(), &1);
     }
 }
+
+#[cfg(test)]
+#[macro_use]
+extern crate serde_derive;
+#[cfg(test)]
+extern crate bincode;
+
+#[cfg(test)]
+mod test_derive {
+    use bincode::{serialize, deserialize, Infinite};
+
+    init_fed!(@deriving:[Serialize, Deserialize]);
+    use self::fed::*;
+
+    fed!(
+        usize,
+        bool,
+        Option<String>,
+        char,
+    );
+
+    #[test]
+    fn test_derived() {
+        let a: Fed4<_,_,_,_> = 42.into();
+
+        let encoded = serialize(&a, Infinite).unwrap();
+
+        let decoded = deserialize(&encoded[..]).unwrap();
+
+        assert_eq!(a, decoded);
+    }
+}
